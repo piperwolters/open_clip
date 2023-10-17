@@ -61,7 +61,7 @@ def backward(total_loss, scaler):
         total_loss.backward()
 
 
-def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=None):
+def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=None, num_samples=0):
     device = torch.device(args.device)
     autocast = get_autocast(args.precision)
     input_dtype = get_input_dtype(args.precision)
@@ -70,13 +70,15 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     if args.distill:
         dist_model.eval()
 
-    data['train'].set_epoch(epoch)  # set epoch in process safe manner via sampler or shared_epoch
-    dataloader = data['train'].dataloader
-    num_batches_per_epoch = dataloader.num_batches // args.accum_freq
-    sample_digits = math.ceil(math.log(dataloader.num_samples + 1, 10))
+    #data['train'].set_epoch(epoch)  # set epoch in process safe manner via sampler or shared_epoch
+    #dataloader = data['train'].dataloader
+    dataloader = data
+    #num_batches_per_epoch = dataloader.num_batches // args.accum_freq
+    num_batches_per_epoch = len(dataloader) // args.accum_freq
+    sample_digits = math.ceil(math.log(num_samples + 1, 10))
 
     if args.accum_freq > 1:
-        accum_images, accum_texts, accum_features = [], [], {}
+        accum_s2_images, accum_naip_images, accum_features = [], [], {}
 
     losses_m = {}
     batch_time_m = AverageMeter()
@@ -89,20 +91,20 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         if not args.skip_scheduler:
             scheduler(step)
 
-        images, texts = batch
-        images = images.to(device=device, dtype=input_dtype, non_blocking=True)
-        texts = texts.to(device=device, non_blocking=True)
+        s2_images, naip_images = batch
+        s2_images = s2_images.to(device=device, dtype=input_dtype, non_blocking=True)
+        naip_images = naip_images.to(device=device, dtype=input_dtype, non_blocking=True)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
 
         if args.accum_freq == 1:
             with autocast():
-                model_out = model(images, texts)
+                model_out = model(s2_images, naip_images)
                 logit_scale = model_out["logit_scale"]
                 if args.distill:
                     with torch.no_grad():
-                        dist_model_out = dist_model(images, texts)
+                        dist_model_out = dist_model(s2_images, naip_images)
                     model_out.update({f'dist_{k}': v for k, v in dist_model_out.items()})
                 losses = loss(**model_out, output_dict=True)
 
@@ -114,7 +116,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             # First, cache the features without any gradient tracking.
             with torch.no_grad():
                 with autocast():
-                    model_out = model(images, texts)
+                    model_out = model(s2_images, naip_images)
 
                     for f in ("logit_scale", "logit_bias"):
                         model_out.pop(f, None)
@@ -125,8 +127,9 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                         else:
                             accum_features[key] = [val]
 
-                accum_images.append(images)
-                accum_texts.append(texts)
+                accum_s2_images.append(s2_images)
+                accum_naip_images.append(naip_images)
+                #accum_texts.append(texts)
 
             # If (i + 1) % accum_freq is not zero, move on to the next batch.
             if ((i + 1) % args.accum_freq) > 0:
@@ -138,10 +141,11 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             # Call backwards each time, but only step optimizer at the end.
             optimizer.zero_grad()
             for j in range(args.accum_freq):
-                images = accum_images[j]
-                texts = accum_texts[j]
+                s2_images = accum_s2_images[j]
+                naip_images = accum_naip_images[j]
+                #texts = accum_texts[j]
                 with autocast():
-                    model_out = model(images, texts)
+                    model_out = model(s2_images, naip_images)
 
                     inputs_no_accum = {}
                     inputs_no_accum["logit_scale"] = logit_scale = model_out.pop("logit_scale")
@@ -192,9 +196,9 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         end = time.time()
         batch_count = i_accum + 1
         if is_master(args) and (i_accum % args.log_every_n_steps == 0 or batch_count == num_batches_per_epoch):
-            batch_size = len(images)
+            batch_size = len(s2_images)
             num_samples = batch_count * batch_size * args.accum_freq * args.world_size
-            samples_per_epoch = dataloader.num_samples
+            samples_per_epoch = num_samples
             percent_complete = 100.0 * batch_count / num_batches_per_epoch
 
             # NOTE loss is coarsely sampled, just master node and per log update

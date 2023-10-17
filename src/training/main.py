@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from torch import optim
 from torch.cuda.amp import GradScaler
+from torch.utils.data import DataLoader
 
 try:
     import wandb
@@ -219,7 +220,7 @@ def main(args):
     if args.siglip:
         model_kwargs['init_logit_scale'] = np.log(10)  # different from CLIP
         model_kwargs['init_logit_bias'] = -10
-    model, preprocess_train, preprocess_val = create_model_and_transforms(
+    model, preprocess_s2_train, preprocess_s2_val, preprocess_naip_train, preprocess_naip_val = create_model_and_transforms(
         args.model,
         args.pretrained,
         precision=args.precision,
@@ -350,13 +351,25 @@ def main(args):
             logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
 
     # initialize datasets
-    data = get_data(args, (preprocess_train, preprocess_val), epoch=start_epoch, tokenizer=get_tokenizer(args.model))
+    data = get_data(args, 
+            (preprocess_s2_train, preprocess_naip_train, preprocess_s2_val, preprocess_naip_val), 
+            epoch=start_epoch, tokenizer=get_tokenizer(args.model)
+            )
     assert len(data), 'At least one train or eval dataset must be specified.'
+
+    train_num_samples = len(data['train'])
+    val_num_samples = len(data['val'])
+    train_sampler = DistributedSampler(data['train']) if args.distributed and is_train else None
+
+    # initialize dataloaders 
+    train_dataloader = DataLoader(data['train'], batch_size=args.batch_size, shuffle=True, sampler=train_sampler, num_workers=args.workers, drop_last=True)
+    val_dataloader = DataLoader(data['val'], shuffle=False)
 
     # create scheduler if train
     scheduler = None
     if 'train' in data and optimizer is not None:
-        total_steps = (data["train"].dataloader.num_batches // args.accum_freq) * args.epochs
+        total_steps = (len(train_dataloader)  // args.accum_freq) * args.epochs
+        #total_steps = (data["train"].dataloader.num_batches // args.accum_freq) * args.epochs
         if args.lr_scheduler == "cosine":
             scheduler = cosine_lr(optimizer, args.lr, args.warmup, total_steps)
         elif args.lr_scheduler == "const":
@@ -364,7 +377,8 @@ def main(args):
         elif args.lr_scheduler == "const-cooldown":
             assert args.epochs_cooldown is not None,\
                 "Please specify the number of cooldown epochs for this lr schedule."
-            cooldown_steps = (data["train"].dataloader.num_batches // args.accum_freq) * args.epochs_cooldown
+            cooldown_steps = (len(train_dataloader)  // args.accum_freq) * args.epochs_cooldown
+            #cooldown_steps = (data["train"].dataloader.num_batches // args.accum_freq) * args.epochs_cooldown
             scheduler = const_lr_cooldown(
                 optimizer, args.lr, args.warmup, total_steps,
                 cooldown_steps, args.lr_cooldown_power, args.lr_cooldown_end)
@@ -383,9 +397,11 @@ def main(args):
     if args.wandb and is_master(args):
         assert wandb is not None, 'Please install wandb.'
         logging.debug('Starting wandb.')
-        args.train_sz = data["train"].dataloader.num_samples
+        args.train_sz = len(data['train'])
+        #args.train_sz = data["train"].dataloader.num_samples
         if args.val_data is not None:
-            args.val_sz = data["val"].dataloader.num_samples
+            args.val_sz = len(data['val'])
+            #args.val_sz = data["val"].dataloader.num_samples
         # you will have to configure this for your project!
         wandb.init(
             project=args.wandb_project_name,
@@ -415,7 +431,7 @@ def main(args):
             from open_clip.utils import convert_int8_model_to_inference_mode
             convert_int8_model_to_inference_mode(model)
         # Evaluate.
-        evaluate(model, data, start_epoch, args, writer)
+        evaluate(model, val_dataloader, start_epoch, args, writer)
         return
 
     loss = create_loss(args)
@@ -424,11 +440,11 @@ def main(args):
         if is_master(args):
             logging.info(f'Start epoch {epoch}')
 
-        train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=writer)
+        train_one_epoch(model, train_dataloader, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=writer, num_samples=train_num_samples)
         completed_epoch = epoch + 1
 
         if any(v in data for v in ('val', 'imagenet-val', 'imagenet-v2')):
-            evaluate(model, data, completed_epoch, args, writer)
+            evaluate(model, val_dataloader, completed_epoch, args, writer)
 
         # Saving checkpoints.
         if args.save_logs:

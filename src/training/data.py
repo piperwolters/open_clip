@@ -20,6 +20,9 @@ from torch.utils.data.distributed import DistributedSampler
 from webdataset.filters import _shuffle
 from webdataset.tariterators import base_plus_ext, url_opener, tar_file_expander, valid_sample
 
+from training.ssr_dataset import SSRDataset
+
+
 try:
     import horovod.torch as hvd
 except ImportError:
@@ -544,9 +547,27 @@ def get_dataset_fn(data_path, dataset_type):
     
 
 def get_data(args, preprocess_fns, epoch=0, tokenizer=None):
-    preprocess_train, preprocess_val = preprocess_fns
+    preprocess_s2_train, preprocess_naip_train, preprocess_s2_val, preprocess_naip_val = preprocess_fns
     data = {}
 
+    if args.train_data:
+        opt = {
+            'sentinel2_path': '/data/piperw/data/full_dataset/s2_condensed',
+            'naip_path': '/data/piperw/data/full_dataset/naip_128',
+            'phase': 'train'
+        }
+        data['train'] = SSRDataset(opt)
+    if args.val_data:
+        opt = {
+            'sentinel2_path': '/data/piperw/data/held_out_set/s2_condensed',
+            'naip_path': '/data/piperw/data/held_out_set/naip_128',
+            'phase': 'val'
+        }
+        data['val'] = SSRDataset(opt)
+
+    print("Returning:", data)
+
+    """
     if args.train_data or args.dataset_type == "synthetic":
         data["train"] = get_dataset_fn(args.train_data, args.dataset_type)(
             args, preprocess_train, is_train=True, epoch=epoch, tokenizer=tokenizer)
@@ -560,5 +581,6 @@ def get_data(args, preprocess_fns, epoch=0, tokenizer=None):
 
     if args.imagenet_v2 is not None:
         data["imagenet-v2"] = get_imagenet(args, preprocess_fns, "v2")
+    """
 
     return data
