@@ -40,8 +40,8 @@ class SSRDataset(data.Dataset):
 
         self.naip_chips = glob.glob(self.naip_path + '/**/*.png', recursive=True)
 
-        if self.split == 'train':
-            self.naip_chips = random.sample(self.naip_chips, 44000000)
+        #if self.split == 'train':
+        #    self.naip_chips = random.sample(self.naip_chips, 44000)
 
         self.datapoints = []
         for n in self.naip_chips:
@@ -64,60 +64,43 @@ class SSRDataset(data.Dataset):
 
     def __getitem__(self, index):
 
-        # A while loop and try/excepts to catch a few potential errors and continue if caught.
-        counter = 0
-        while True:
-            index += counter  # increment the index based on what errors have been caught
-            if index >= self.data_len:
-                index = 0
+        datapoint = self.datapoints[index]
 
-            datapoint = self.datapoints[index]
+        naip_path, s2_path = datapoint[0], datapoint[1]
 
-            naip_path, s2_path = datapoint[0], datapoint[1]
+        # Load the 512x512 NAIP chip.
+        naip_chip = skimage.io.imread(naip_path)
 
-            # Load the 512x512 NAIP chip.
-            naip_chip = skimage.io.imread(naip_path)
+        # Load the T*32x32 S2 file.
+        s2_images = skimage.io.imread(s2_path[0])
 
-            # Check for black pixels (almost certainly invalid) and skip if found.
-            if [0, 0, 0] in naip_chip:
-                counter += 1
-                continue
+        # Reshape to be Tx32x32.
+        s2_chunks = np.reshape(s2_images, (-1, 32, 32, 3))
 
-            # Load the T*32x32 S2 file.
-            # There are a few rare cases where loading the Sentinel-2 image fails, skip if found.
-            try:
-                s2_images = skimage.io.imread(s2_path[0])
-            except:
-                counter += 1
-                continue
-
-            # Reshape to be Tx32x32.
-            s2_chunks = np.reshape(s2_images, (-1, 32, 32, 3))
-
-            # Iterate through the 32x32 chunks at each timestep, separating them into "good" (valid)
-            # and "bad" (partially black, invalid). Will use these to pick best collection of S2 images.
-            goods, bads = [], []
-            for i,ts in enumerate(s2_chunks):
-                if [0, 0, 0] in ts:
-                    bads.append(i)
-                else:
-                    goods.append(i)
-
-            # Pick 18 random indices of s2 images to use. Skip ones that are partially black.
-            if len(goods) >= self.n_s2_images:
-                rand_indices = random.sample(goods, self.n_s2_images)
+        # Iterate through the 32x32 chunks at each timestep, separating them into "good" (valid)
+        # and "bad" (partially black, invalid). Will use these to pick best collection of S2 images.
+        goods, bads = [], []
+        for i,ts in enumerate(s2_chunks):
+            if [0, 0, 0] in ts:
+                bads.append(i)
             else:
-                need = self.n_s2_images - len(goods)
-                rand_indices = goods + random.sample(bads, need)
+                goods.append(i)
 
-            s2_chunks = [s2_chunks[i] for i in rand_indices]
-            s2_chunks = np.array(s2_chunks)
-            s2_chunks = [totensor(img) for img in s2_chunks]
+        # Pick 18 random indices of s2 images to use. Skip ones that are partially black.
+        if len(goods) >= self.n_s2_images:
+            rand_indices = random.sample(goods, self.n_s2_images)
+        else:
+            need = self.n_s2_images - len(goods)
+            rand_indices = goods + random.sample(bads, need)
 
-            img_S2 = torch.cat(s2_chunks)
-            img_HR = totensor(naip_chip).type(torch.FloatTensor)
+        s2_chunks = [s2_chunks[i] for i in rand_indices]
+        s2_chunks = np.array(s2_chunks)
+        s2_chunks = [totensor(img) for img in s2_chunks]
 
-            return img_S2, img_HR
+        img_S2 = torch.cat(s2_chunks)
+        img_HR = totensor(naip_chip).type(torch.FloatTensor)
+
+        return img_S2, img_HR
 
     def __len__(self):
         return self.data_len

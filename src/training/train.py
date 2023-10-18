@@ -86,7 +86,6 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     data_time_m = AverageMeter()
     end = time.time()
     for i, batch in enumerate(dataloader):
-        print("Batch ", i)
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
 
