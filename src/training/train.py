@@ -41,8 +41,8 @@ class AverageMeter(object):
 
 def postprocess_clip_output(model_out):
     return {
-        "image_features": model_out[0],
-        "text_features": model_out[1],
+        "s2_features": model_out[0],
+        "naip_features": model_out[1],
         "logit_scale": model_out[2]
     }
 
@@ -73,6 +73,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     #data['train'].set_epoch(epoch)  # set epoch in process safe manner via sampler or shared_epoch
     #dataloader = data['train'].dataloader
     dataloader = data
+
     #num_batches_per_epoch = dataloader.num_batches // args.accum_freq
     num_batches_per_epoch = len(dataloader) // args.accum_freq
     sample_digits = math.ceil(math.log(num_samples + 1, 10))
@@ -85,6 +86,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     data_time_m = AverageMeter()
     end = time.time()
     for i, batch in enumerate(dataloader):
+        print("Batch ", i)
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
 
@@ -265,40 +267,43 @@ def evaluate(model, data, epoch, args, tb_writer=None):
     autocast = get_autocast(args.precision)
     input_dtype = get_input_dtype(args.precision)
 
-    if 'val' in data and (args.val_frequency and ((epoch % args.val_frequency) == 0 or epoch == args.epochs)):
-        dataloader = data['val'].dataloader
+    #if 'val' in data and (args.val_frequency and ((epoch % args.val_frequency) == 0 or epoch == args.epochs)):
+    if True:
+        #dataloader = data['val'].dataloader
+        dataloader = data
         num_samples = 0
-        samples_per_val = dataloader.num_samples
+        #samples_per_val = dataloader.num_samples
+        samples_per_val = 256
 
         # FIXME this does not scale past small eval datasets
         # all_image_features @ all_text_features will blow up memory and compute very quickly
         cumulative_loss = 0.0
         cumulative_gen_loss = 0.0
-        all_image_features, all_text_features = [], []
+        all_s2_features, all_naip_features = [], []
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
-                images, texts = batch
-                images = images.to(device=device, dtype=input_dtype, non_blocking=True)
-                texts = texts.to(device=device, non_blocking=True)
+                s2, naip = batch
+                s2 = s2.to(device=device, dtype=input_dtype, non_blocking=True)
+                naip = naip.to(device=device, non_blocking=True)
 
                 with autocast():
-                    model_out = model(images, texts)
-                    image_features = model_out["image_features"]
-                    text_features = model_out["text_features"]
+                    model_out = model(s2, naip)
+                    s2_features = model_out["s2_features"]
+                    naip_features = model_out["naip_features"]
                     logit_scale = model_out["logit_scale"]
                     # features are accumulated in CPU tensors, otherwise GPU memory exhausted quickly
                     # however, system RAM is easily exceeded and compute time becomes problematic
-                    all_image_features.append(image_features.cpu())
-                    all_text_features.append(text_features.cpu())
+                    all_s2_features.append(s2_features.cpu())
+                    all_naip_features.append(naip_features.cpu())
                     logit_scale = logit_scale.mean()
-                    logits_per_image = logit_scale * image_features @ text_features.t()
-                    logits_per_text = logits_per_image.t()
+                    logits_per_s2 = logit_scale * s2_features @ naip_features.t()
+                    logits_per_naip = logits_per_s2.t()
 
-                    batch_size = images.shape[0]
+                    batch_size = s2.shape[0]
                     labels = torch.arange(batch_size, device=device).long()
                     total_loss = (
-                        F.cross_entropy(logits_per_image, labels) +
-                        F.cross_entropy(logits_per_text, labels)
+                        F.cross_entropy(logits_per_s2, labels) +
+                        F.cross_entropy(logits_per_naip, labels)
                     ) / 2
 
                     gen_loss = maybe_compute_generative_loss(model_out)
@@ -316,8 +321,8 @@ def evaluate(model, data, epoch, args, tb_writer=None):
                             f"Generative Loss: {cumulative_gen_loss / num_samples:.6f}\t")
 
             val_metrics = get_clip_metrics(
-                image_features=torch.cat(all_image_features),
-                text_features=torch.cat(all_text_features),
+                s2_features=torch.cat(all_s2_features),
+                naip_features=torch.cat(all_naip_features),
                 logit_scale=logit_scale.cpu(),
             )
             loss = cumulative_loss / num_samples
@@ -349,9 +354,11 @@ def evaluate(model, data, epoch, args, tb_writer=None):
 
     if args.wandb:
         assert wandb is not None, 'Please install wandb.'
-        if 'train' in data:
-            dataloader = data['train'].dataloader
-            num_batches_per_epoch = dataloader.num_batches // args.accum_freq
+        #if 'train' in data:
+        if False:
+            #dataloader = data #['train'].dataloader
+            #num_batches_per_epoch = dataloader.num_batches // args.accum_freq
+            #num_batches_per_epoch = #43362 // 8
             step = num_batches_per_epoch * epoch
         else:
             step = None
@@ -361,13 +368,13 @@ def evaluate(model, data, epoch, args, tb_writer=None):
     return metrics
 
 
-def get_clip_metrics(image_features, text_features, logit_scale):
+def get_clip_metrics(s2_features, naip_features, logit_scale):
     metrics = {}
-    logits_per_image = (logit_scale * image_features @ text_features.t()).detach().cpu()
-    logits_per_text = logits_per_image.t().detach().cpu()
+    logits_per_s2 = (logit_scale * s2_features @ naip_features.t()).detach().cpu()
+    logits_per_naip = logits_per_s2.t().detach().cpu()
 
-    logits = {"image_to_text": logits_per_image, "text_to_image": logits_per_text}
-    ground_truth = torch.arange(len(text_features)).view(-1, 1)
+    logits = {"s2_to_naip": logits_per_s2, "naip_to_s2": logits_per_naip}
+    ground_truth = torch.arange(len(naip_features)).view(-1, 1)
 
     for name, logit in logits.items():
         ranking = torch.argsort(logit, descending=True)

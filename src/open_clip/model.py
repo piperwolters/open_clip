@@ -123,7 +123,6 @@ def _build_s2_vision_tower(
         )
     else:
     """
-    print("vision transformer?")
     vision_heads = vision_cfg.width // vision_cfg.head_width
     norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat16) else LayerNorm
     visual = VisionTransformer(
@@ -388,8 +387,6 @@ class CLIP(nn.Module):
             s2: Optional[torch.Tensor] = None,
             naip: Optional[torch.Tensor] = None,
     ):
-        print("CLIP forward:", s2.shape, naip.shape)
-
         s2_features = self.encode_s2(s2, normalize=True) if s2 is not None else None
         naip_features = self.encode_naip(naip, normalize=True) if naip is not None else None
         #text_features = self.encode_text(text, normalize=True) if text is not None else None

@@ -12,6 +12,7 @@ import torch
 from torch import optim
 from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 try:
     import wandb
@@ -355,14 +356,15 @@ def main(args):
             (preprocess_s2_train, preprocess_naip_train, preprocess_s2_val, preprocess_naip_val), 
             epoch=start_epoch, tokenizer=get_tokenizer(args.model)
             )
-    assert len(data), 'At least one train or eval dataset must be specified.'
+    #assert len(data), 'At least one train or eval dataset must be specified.'
 
     train_num_samples = len(data['train'])
     val_num_samples = len(data['val'])
-    train_sampler = DistributedSampler(data['train']) if args.distributed and is_train else None
+
+    train_sampler = DistributedSampler(data['train']) if args.distributed else None
 
     # initialize dataloaders 
-    train_dataloader = DataLoader(data['train'], batch_size=args.batch_size, shuffle=True, sampler=train_sampler, num_workers=args.workers, drop_last=True)
+    train_dataloader = DataLoader(data['train'], batch_size=args.batch_size, shuffle=False, sampler=train_sampler, num_workers=args.workers, drop_last=True)
     val_dataloader = DataLoader(data['val'], shuffle=False)
 
     # create scheduler if train
@@ -442,6 +444,7 @@ def main(args):
 
         train_one_epoch(model, train_dataloader, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=writer, num_samples=train_num_samples)
         completed_epoch = epoch + 1
+        logging.info(f'Finished epoch {epoch}')
 
         if any(v in data for v in ('val', 'imagenet-val', 'imagenet-v2')):
             evaluate(model, val_dataloader, completed_epoch, args, writer)

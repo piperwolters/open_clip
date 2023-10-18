@@ -565,8 +565,6 @@ def get_data(args, preprocess_fns, epoch=0, tokenizer=None):
         }
         data['val'] = SSRDataset(opt)
 
-    print("Returning:", data)
-
     """
     if args.train_data or args.dataset_type == "synthetic":
         data["train"] = get_dataset_fn(args.train_data, args.dataset_type)(

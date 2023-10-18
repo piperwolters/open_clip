@@ -177,13 +177,10 @@ def create_model(
         # 'embed_dim': 1024, 'vision_cfg': {'image_size': 224, 'layers': [3, 4, 6, 3], 'width': 64, 'patch_size': None}, 
         # 'text_cfg': {'context_length': 77, 'vocab_size': 49408, 'width': 512, 'heads': 8, 'layers': 12}
         # }
-        print("model cfg:", model_cfg)
-
         model_cfg['s2_vision_cfg'] = model_cfg['vision_cfg']
         model_cfg['naip_vision_cfg'] = model_cfg['vision_cfg']
         del model_cfg['vision_cfg']
         del model_cfg['text_cfg']
-        print("after:", model_cfg)
 
         if model_cfg is not None:
             logging.info(f'Loaded {model_name} model config.')
