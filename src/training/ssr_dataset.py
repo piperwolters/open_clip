@@ -56,6 +56,9 @@ class SSRDataset(data.Dataset):
             diffs = int(chip.split('_')[0]) - s2_left_corner[0], int(chip.split('_')[1]) - s2_left_corner[1]
 
             s2_path = [os.path.join(self.s2_path, str(tile[0])+'_'+str(tile[1]), str(diffs[1])+'_'+str(diffs[0])+'.png')]
+            if not os.path.exists(s2_path[0]):
+                print("Skipping ", s2_path[0])
+                continue
 
             self.datapoints.append([n, s2_path])
 
