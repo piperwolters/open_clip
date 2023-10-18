@@ -11,6 +11,8 @@ from torch.utils import data as data
 from torchvision.transforms import functional as trans_fn
 from basicsr.utils.registry import DATASET_REGISTRY
 
+from multiprocessing import Manager
+
 totensor = torchvision.transforms.ToTensor()
 
 
@@ -40,10 +42,10 @@ class SSRDataset(data.Dataset):
 
         self.naip_chips = glob.glob(self.naip_path + '/**/*.png', recursive=True)
 
-        #if self.split == 'train':
-        #    self.naip_chips = random.sample(self.naip_chips, 44000)
+        if self.split == 'train':
+            self.naip_chips = random.sample(self.naip_chips, 44000)
 
-        self.datapoints = []
+        datapoints = []
         for n in self.naip_chips:
 
             # Extract the X,Y tile from this NAIP image filepath.
@@ -59,7 +61,10 @@ class SSRDataset(data.Dataset):
             if not os.path.exists(s2_path[0]):
                 continue
 
-            self.datapoints.append([n, s2_path])
+            datapoints.append([n, s2_path])
+
+        manager = Manager()
+        self.datapoints = manager.list(datapoints)
 
         self.data_len = len(self.datapoints)
         print("Number of datapoints for split ", self.split, ": ", self.data_len)
