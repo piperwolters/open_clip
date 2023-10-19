@@ -3,6 +3,7 @@ wandb/
 models/
 features/
 results/
+src/clip_score/compare/
 
 tests/data/
 *.pt
