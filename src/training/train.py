@@ -94,26 +94,33 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             scheduler(step)
 
         s2_images, naip_images = batch
-        s2_images = s2_images.to(device=device, dtype=input_dtype, non_blocking=True)
-        naip_images = naip_images.to(device=device, dtype=input_dtype, non_blocking=True)
+        s2_images = s2_images.to(device=device, dtype=input_dtype) #, non_blocking=True)
+        naip_images = naip_images.to(device=device, dtype=input_dtype) #, non_blocking=True)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
 
+        batch_size = len(s2_images)
         if args.accum_freq == 1:
             with autocast():
                 model_out = model(s2_images, naip_images)
                 logit_scale = model_out["logit_scale"]
-                if args.distill:
-                    with torch.no_grad():
-                        dist_model_out = dist_model(s2_images, naip_images)
-                    model_out.update({f'dist_{k}': v for k, v in dist_model_out.items()})
-                losses = loss(**model_out, output_dict=True)
 
+                #if args.distill:
+                #    with torch.no_grad():
+                #        dist_model_out = dist_model(s2_images, naip_images)
+                #    model_out.update({f'dist_{k}': v for k, v in dist_model_out.items()})
+
+                losses = loss(**model_out, output_dict=True)
                 total_loss = sum(losses.values())
                 losses["loss"] = total_loss
 
             backward(total_loss, scaler)
+
+            del total_loss
+            del s2_images
+            del naip_images
+            del model_out
         else:
             # First, cache the features without any gradient tracking.
             with torch.no_grad():
@@ -198,7 +205,6 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         end = time.time()
         batch_count = i_accum + 1
         if is_master(args) and (i_accum % args.log_every_n_steps == 0 or batch_count == num_batches_per_epoch):
-            batch_size = len(s2_images)
             num_samples = batch_count * batch_size * args.accum_freq * args.world_size
             samples_per_epoch = num_samples
             percent_complete = 100.0 * batch_count / num_batches_per_epoch
@@ -253,6 +259,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             data_time_m.reset()
 
         gc.collect()
+        torch.cuda.empty_cache()
     # end for
 
 
