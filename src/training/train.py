@@ -169,12 +169,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                     losses = loss(**inputs, **inputs_no_accum, output_dict=True)
                     del inputs
                     del inputs_no_accum
-                    print("losses:", losses)
-                    #total_loss = sum(losses.values())
-                    total_loss = losses['contrastive_loss'].detach().item()
-                    print("total_loss:", total_loss)
+                    total_loss = sum(losses.values())
                     losses["loss"] = total_loss
-                    print("losses[loss]:", losses)
 
                 backward(total_loss, scaler)
 
@@ -296,7 +292,6 @@ def evaluate(model, data, epoch, args, tb_writer=None):
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
                 s2, naip = batch
-                print("val batch:", s2.shape, naip.shape)
                 s2 = s2.to(device=device, dtype=input_dtype, non_blocking=True)
                 naip = naip.to(device=device, non_blocking=True)
 
