@@ -261,13 +261,9 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             # resetting batch / data time meters per log window
             batch_time_m.reset()
             data_time_m.reset()
-<<<<<<< HEAD
-        gc.collect()
-=======
 
         gc.collect()
         torch.cuda.empty_cache()
->>>>>>> 53267545c81f6482f2f2df6ff5df1d1b8bc9f1be
     # end for
 
 
