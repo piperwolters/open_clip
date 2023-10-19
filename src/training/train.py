@@ -3,6 +3,7 @@ import logging
 import math
 import os
 import time
+import gc
 
 import numpy as np
 import torch
@@ -93,8 +94,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             scheduler(step)
 
         s2_images, naip_images = batch
-        s2_images = s2_images.to(device=device, dtype=input_dtype, non_blocking=True)
-        naip_images = naip_images.to(device=device, dtype=input_dtype, non_blocking=True)
+        s2_images = s2_images.to(device=device, dtype=input_dtype)  #, non_blocking=True)
+        naip_images = naip_images.to(device=device, dtype=input_dtype)  #, non_blocking=True)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
@@ -161,8 +162,12 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                     losses = loss(**inputs, **inputs_no_accum, output_dict=True)
                     del inputs
                     del inputs_no_accum
-                    total_loss = sum(losses.values())
+                    print("losses:", losses)
+                    #total_loss = sum(losses.values())
+                    total_loss = losses['contrastive_loss'].detach().item()
+                    print("total_loss:", total_loss)
                     losses["loss"] = total_loss
+                    print("losses[loss]:", losses)
 
                 backward(total_loss, scaler)
 
@@ -250,6 +255,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             # resetting batch / data time meters per log window
             batch_time_m.reset()
             data_time_m.reset()
+        gc.collect()
     # end for
 
 
@@ -282,6 +288,7 @@ def evaluate(model, data, epoch, args, tb_writer=None):
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
                 s2, naip = batch
+                print("val batch:", s2.shape, naip.shape)
                 s2 = s2.to(device=device, dtype=input_dtype, non_blocking=True)
                 naip = naip.to(device=device, non_blocking=True)
 
