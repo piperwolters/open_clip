@@ -559,8 +559,8 @@ def get_data(args, preprocess_fns, epoch=0, tokenizer=None):
         data['train'] = SSRDataset(opt)
     if args.val_data:
         opt = {
-            'sentinel2_path': '/data/piperw/data/held_out_set/s2_condensed',
-            'naip_path': '/data/piperw/data/held_out_set/naip_128',
+            'sentinel2_path': '/data/piperw/data/val_set/s2_condensed',
+            'naip_path': '/data/piperw/data/val_set/naip_128',
             'phase': 'val'
         }
         data['val'] = SSRDataset(opt)

@@ -4,7 +4,6 @@ import glob
 import torch
 import random
 import torchvision
-#import skimage.io
 import numpy as np
 from PIL import Image
 from torch.utils import data as data
@@ -75,11 +74,9 @@ class SSRDataset(data.Dataset):
 
         naip_path, s2_path = datapoint[0], datapoint[1]
 
-        # Load the 512x512 NAIP chip.
         #naip_chip = skimage.io.imread(naip_path)
         naip_chip = Image.open(naip_path)
 
-        # Load the T*32x32 S2 file.
         #s2_images = skimage.io.imread(s2_path[0])
         s2_images = Image.open(s2_path[0])
 
