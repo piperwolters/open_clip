@@ -42,8 +42,8 @@ class SSRDataset(data.Dataset):
 
         self.naip_chips = glob.glob(self.naip_path + '/**/*.png', recursive=True)
 
-        if self.split == 'train':
-            self.naip_chips = random.sample(self.naip_chips, 1000000)
+        #if self.split == 'train':
+        #    self.naip_chips = random.sample(self.naip_chips, 1000000)
 
         datapoints = []
         for n in self.naip_chips:
