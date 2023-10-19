@@ -143,6 +143,7 @@ def _build_s2_vision_tower(
         output_dim=embed_dim,
         act_layer=act_layer,
         norm_layer=norm_layer,
+        in_channels=3  # try a sequence of 8 RGB S2 images
     )
 
     return visual
@@ -206,6 +207,7 @@ def _build_naip_vision_tower(
         output_dim=embed_dim,
         act_layer=act_layer,
         norm_layer=norm_layer,
+        in_channels=3
     )
 
     return visual
@@ -400,6 +402,7 @@ class CLIP(nn.Module):
             }
             if self.logit_bias is not None:
                 out_dict['logit_bias'] = self.logit_bias
+
             return out_dict
 
         if self.logit_bias is not None:

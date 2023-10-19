@@ -343,7 +343,8 @@ class VisionTransformer(nn.Module):
             input_patchnorm: bool = False,
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
-            output_tokens: bool = False
+            output_tokens: bool = False,
+            in_channels: int = 3
     ):
         super().__init__()
         self.output_tokens = output_tokens
@@ -361,7 +362,7 @@ class VisionTransformer(nn.Module):
             self.conv1 = nn.Linear(patch_input_dim, width)
         else:
             self.patchnorm_pre_ln = nn.Identity()
-            self.conv1 = nn.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
+            self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
 
         # class embeddings and positional embeddings
         scale = width ** -0.5
