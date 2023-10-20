@@ -2,11 +2,15 @@ import os
 import sys
 import cv2
 import glob
+import clip
 import torch
 import skimage.io
 import numpy as np
 import torch.nn.functional as F
-#from PIL import Image
+import torchvision
+import matplotlib
+import matplotlib.pyplot as plt
+from PIL import Image
 from basicsr.archs.rrdbnet_arch import RRDBNet
 
 sys.path.append('/data/piperw/open_clip/src/')
@@ -21,14 +25,12 @@ s2_info = {}
 s2_vision_cfg = CLIPVisionCfg(**s2_info)
 naip_info = {}
 naip_vision_cfg = CLIPVisionCfg(**naip_info)
-
 # Initialize the CLIP model.
 clip_model = CLIP(
             embed_dim=512, 
             s2_vision_cfg=s2_vision_cfg, 
             naip_vision_cfg=naip_vision_cfg,
         )
-
 # Load the pretrained CLIP checkpoint. Load weights into model.
 weights_path = '/data/piperw/open_clip/src/logs/late-1mildataset-1gpu-1024batch-8workers/checkpoints/epoch_46.pt'
 weights_dict = torch.load(weights_path)
@@ -36,6 +38,9 @@ state_dict = weights_dict['state_dict']
 clip_model.load_state_dict(state_dict)
 clip_model.eval()
 clip_model.to(device)
+
+# Load pretrained CLIP (normal CLIP)
+actual_clip_model, preprocess = clip.load("ViT-B/32", device=device)
 
 # Initialize pretrained super-res model. Load in weights.
 sr_weights_path = '/data/piperw/super-res/satlas-super-resolution/experiments/satlas32_baseline/models/net_g_905000.pth'
@@ -50,14 +55,86 @@ s2_dir = data_dir + 's2_condensed/'
 naip_dir = data_dir + 'naip_128/'
 save_path = 'sr_outputs/'
 
-# This loop is specific to the html vis
+#### This loop is specific to the html vis ####
 d = 'compare/'
 for i in range(0, 30):
     base_path = d + str(i)
     if not os.path.exists(base_path):
         continue
 
-    print(base_path)
+    # Load, preprocess, and feed images through actual CLIP
+    naip_im = preprocess(Image.open(base_path + '/hr.png')).unsqueeze(0).to(device)
+    high_im = preprocess(Image.open(base_path + '/highresnet.png')).unsqueeze(0).to(device)
+    sr3_im = preprocess(Image.open(base_path + '/sr3_cfg.png')).unsqueeze(0).to(device)
+    gan_im = preprocess(Image.open(base_path + '/esrgan.png')).unsqueeze(0).to(device)
+
+    """
+    naip_feats = actual_clip_model.encode_image(naip_im)
+    high_feats = actual_clip_model.encode_image(high_im)
+    sr3_feats = actual_clip_model.encode_image(sr3_im)
+    gan_feats = actual_clip_model.encode_image(gan_im)
+    """
+
+    # Divide each of these into 4x4 grids and then feed through model and take cosine similarity
+    div = 4  # 4
+    whl = 128
+    l = int(whl / div)
+
+    highs = np.zeros((div,div))
+    sr3s = np.zeros((div,div))
+    gans = np.zeros((div,div))
+    for i in range(div):
+        for j in range(div):
+            naip_chunk = F.upsample(naip_im[:, :, i*l:(i+1)*l, j*l:(j+1)*l], (224,224))
+            naip_feat = actual_clip_model.encode_image(naip_chunk)
+
+            high_chunk = F.upsample(high_im[:, :, i*l:(i+1)*l, j*l:(j+1)*l], (224,224))
+            high_feat = actual_clip_model.encode_image(high_chunk)
+
+            sr3_chunk = F.upsample(sr3_im[:, :, i*l:(i+1)*l, j*l:(j+1)*l], (224,224))
+            sr3_feat = actual_clip_model.encode_image(sr3_chunk)
+
+            gan_chunk = F.upsample(gan_im[:, :, i*l:(i+1)*l, j*l:(j+1)*l], (224,224))
+            gan_feat = actual_clip_model.encode_image(gan_chunk)
+
+            naip_high_i_j = F.cosine_similarity(naip_feat, high_feat).detach().cpu()
+            naip_sr3_i_j = F.cosine_similarity(naip_feat, sr3_feat).detach().cpu()
+            naip_gan_i_j = F.cosine_similarity(naip_feat, gan_feat).detach().cpu()
+
+            highs[i,j] = naip_high_i_j
+            sr3s[i,j] = naip_sr3_i_j
+            gans[i,j] = naip_gan_i_j
+     
+    plt.imshow(highs, cmap='seismic', vmin=0.9, vmax=1.0)
+    plt.colorbar()
+    #plt.savefig(base_path+'/highs_16x16.png')
+    plt.savefig(base_path+'/highs.png')
+    plt.close()
+
+    plt.imshow(sr3s, cmap='seismic', vmin=0.9, vmax=1.0)
+    plt.colorbar()
+    #plt.savefig(base_path+'/sr3s_16x16.png')
+    plt.savefig(base_path+'/sr3s.png')
+    plt.close()
+
+    plt.imshow(gans, cmap='seismic', vmin=0.9, vmax=1.0)
+    plt.colorbar()
+    #plt.savefig(base_path+'/gans_16x16.png')
+    plt.savefig(base_path+'/gan.png')
+    plt.close()
+
+    #skimage.io.imsave(base_path + '/highs.png', highs)
+    #skimage.io.imsave(base_path + '/sr3s.png', sr3s)
+    #skimage.io.imsave(base_path + '/gans.png', gans)
+
+    continue
+
+    """
+    clip_s2_high = str(F.cosine_similarity(naip_feats, high_feats).detach().item())
+    clip_s2_sr3 = str(F.cosine_similarity(naip_feats, sr3_feats).detach().item())
+    clip_s2_gan = str(F.cosine_similarity(naip_feats, gan_feats).detach().item())
+    print("clip results:", clip_s2_high, clip_s2_sr3, clip_s2_gan)
+
     # Load all the images and pre-computed outputs
     s2 = cv2.resize(skimage.io.imread(base_path + '/s2.png'), (32, 32))
     naip = skimage.io.imread(base_path + '/hr.png')
@@ -88,9 +165,11 @@ for i in range(0, 30):
     print("results:", s2_naip, s2_high, s2_sr3, s2_gan)
 
     with open(base_path + '/cos_sims.txt', 'w') as f:
-        f.write(s2_naip+', '+s2_high+', '+s2_sr3+', '+s2_gan)
+        f.write(s2_naip+', '+s2_high+', '+s2_sr3+', '+s2_gan+', '+clip_s2_high+', '+clip_s2_sr3+', '+clip_s2_gan)
+    """
 
 exit()
+########
 
 # Following loop is for running both SR and CLIP on some val set.
 # Run datapoints through super-res model and save outputs. 
