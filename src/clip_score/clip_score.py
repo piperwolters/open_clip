@@ -143,11 +143,11 @@ for i in range(0, 30):
     gan = skimage.io.imread(base_path + '/esrgan.png')
 
     # Turn them all into tensors of the correct shape
-    s2 = torch.tensor(np.transpose(s2, (2, 0, 1))).unsqueeze(0).float().to(device)
-    naip = torch.tensor(np.transpose(naip, (2, 0, 1))).unsqueeze(0).float().to(device)
-    high = torch.tensor(np.transpose(high, (2, 0, 1))).unsqueeze(0).float().to(device)
-    sr3 = torch.tensor(np.transpose(sr3, (2, 0, 1))).unsqueeze(0).float().to(device)
-    gan = torch.tensor(np.transpose(gan, (2, 0, 1))).unsqueeze(0).float().to(device)
+    s2 = torch.tensor(np.transpose(s2, (2, 0, 1))).unsqueeze(0).float().to(device)/255
+    naip = torch.tensor(np.transpose(naip, (2, 0, 1))).unsqueeze(0).float().to(device)/255
+    high = torch.tensor(np.transpose(high, (2, 0, 1))).unsqueeze(0).float().to(device)/255
+    sr3 = torch.tensor(np.transpose(sr3, (2, 0, 1))).unsqueeze(0).float().to(device)/255
+    gan = torch.tensor(np.transpose(gan, (2, 0, 1))).unsqueeze(0).float().to(device)/255
     print("tensor shapes:", s2.shape, naip.shape, high.shape, sr3.shape, gan.shape)
 
     # Feed all these through their respective encoders of CLIP
