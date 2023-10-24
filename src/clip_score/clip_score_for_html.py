@@ -160,7 +160,6 @@ for i in range(0, 30):
     s2_high = str(F.cosine_similarity(s2_emb, high_emb).detach().item())
     s2_sr3 = str(F.cosine_similarity(s2_emb, sr3_emb).detach().item())
     s2_gan = str(F.cosine_similarity(s2_emb, gan_emb).detach().item())
-    print("results:", s2_naip, s2_high, s2_sr3, s2_gan)
 
     with open(base_path + '/cos_sims.txt', 'w') as f:
         f.write(s2_naip+', '+s2_high+', '+s2_sr3+', '+s2_gan+', '+clip_s2_high+', '+clip_s2_sr3+', '+clip_s2_gan)
