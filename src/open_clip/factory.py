@@ -18,7 +18,7 @@ from .loss import ClipLoss, DistillClipLoss, CoCaLoss, SigLipLoss
 from .openai import load_openai_model
 from .pretrained import is_pretrained_cfg, get_pretrained_cfg, download_pretrained,\
     list_pretrained_tags_by_model, download_pretrained_from_hf
-from .transform import s2_image_transform, naip_image_transform, AugmentationCfg
+from .transform import naip_image_transform, AugmentationCfg
 from .tokenizer import HFTokenizer, tokenize, syntax_mask_tokenize, random_mask_tokenize, block_mask_tokenize
 
 
@@ -174,10 +174,9 @@ def create_model(
         model_cfg = model_cfg or get_model_config(model_name)
 
         # Original cfg: model cfg: {
-        # 'embed_dim': 1024, 'vision_cfg': {'image_size': 224, 'layers': [3, 4, 6, 3], 'width': 64, 'patch_size': None}, 
+        # 'embed_dim': 1024, 'vision_cfg': {'image_size': 224, 'layers': [3, 4, 6, 3], 'width': 64, 'patch_size': None},
         # 'text_cfg': {'context_length': 77, 'vocab_size': 49408, 'width': 512, 'heads': 8, 'layers': 12}
         # }
-        model_cfg['s2_vision_cfg'] = model_cfg['vision_cfg']
         model_cfg['naip_vision_cfg'] = model_cfg['vision_cfg']
         del model_cfg['vision_cfg']
         del model_cfg['text_cfg']
@@ -277,8 +276,6 @@ def create_model(
 
         # set image / mean metadata from pretrained_cfg if available, or use default
         # TODO: find mean and std of our dataset?
-        #model.s2_visual.image_mean = pretrained_cfg.get('mean', None) or OPENAI_DATASET_MEAN
-        #model.s2_visual.image_std = pretrained_cfg.get('std', None) or OPENAI_DATASET_STD
 
     if output_dict and hasattr(model, "output_dict"):
         model.output_dict = True
@@ -362,39 +359,23 @@ def create_model_and_transforms(
         **model_kwargs,
     )
 
-    s2_image_mean = image_mean or getattr(model.s2_visual, 'image_mean', None)
-    s2_image_std = image_std or getattr(model.s2_visual, 'image_std', None)
-    preprocess_s2_train = s2_image_transform(
-        model.s2_visual.image_size,
-        is_train=True,
-        mean=s2_image_mean,
-        std=s2_image_std,
-        aug_cfg=aug_cfg,
-    )
-    preprocess_s2_val = s2_image_transform(
-        model.s2_visual.image_size,
-        is_train=False,
-        mean=s2_image_mean,
-        std=s2_image_std,
-    )
-
-    naip_image_mean = image_mean or getattr(model.naip_visual, 'image_mean', None)
-    naip_image_std = image_std or getattr(model.naip_visual, 'image_std', None)
+    naip_image_mean = image_mean or getattr(model.visual, 'image_mean', None)
+    naip_image_std = image_std or getattr(model.visual, 'image_std', None)
     preprocess_naip_train = naip_image_transform(
-        model.naip_visual.image_size,
+        model.visual.image_size,
         is_train=True,
         mean=naip_image_mean,
         std=naip_image_std,
         aug_cfg=aug_cfg,
     )
     preprocess_naip_val = naip_image_transform(
-        model.naip_visual.image_size,
+        model.visual.image_size,
         is_train=False,
         mean=naip_image_mean,
         std=naip_image_std,
     )
 
-    return model, preprocess_s2_train, preprocess_s2_val, preprocess_naip_train, preprocess_naip_val
+    return model, preprocess_naip_train, preprocess_naip_val
 
 
 def create_model_from_pretrained(

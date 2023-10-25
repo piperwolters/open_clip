@@ -99,33 +99,33 @@ class ClipLoss(nn.Module):
             labels = self.labels[device]
         return labels
 
-    def get_logits(self, s2_features, naip_features, logit_scale):
+    def get_logits(self, naip1_features, naip2_features, logit_scale):
         if self.world_size > 1:
-            all_s2_features, all_naip_features = gather_features(
-                s2_features, naip_features,
+            all_naip1_features, all_naip2_features = gather_features(
+                naip1_features, naip2_features,
                 self.local_loss, self.gather_with_grad, self.rank, self.world_size, self.use_horovod)
 
             if self.local_loss:
-                logits_per_s2 = logit_scale * s2_features @ all_naip_features.T
-                logits_per_naip = logit_scale * naip_features @ all_s2_features.T
+                logits_per_1 = logit_scale * naip1_features @ all_naip2_features.T
+                logits_per_2 = logit_scale * naip2_features @ all_naip1_features.T
             else:
-                logits_per_s2 = logit_scale * all_s2_features @ all_naip_features.T
-                logits_per_naip = logits_per_s2.T
+                logits_per_1 = logit_scale * all_naip1_features @ all_naip2_features.T
+                logits_per_2 = logits_per_1.T
         else:
-            logits_per_s2 = logit_scale * s2_features @ naip_features.T
-            logits_per_naip = logit_scale * naip_features @ s2_features.T
-        
-        return logits_per_s2, logits_per_naip
+            logits_per_1 = logit_scale * naip1_features @ naip2_features.T
+            logits_per_2 = logit_scale * naip2_features @ naip1_features.T
 
-    def forward(self, s2_features, naip_features, logit_scale, output_dict=False):
-        device = s2_features.device
-        logits_per_s2, logits_per_naip = self.get_logits(s2_features, naip_features, logit_scale)
+        return logits_per_1, logits_per_2
 
-        labels = self.get_ground_truth(device, logits_per_s2.shape[0])
+    def forward(self, naip1_features, naip2_features, logit_scale, output_dict=False):
+        device = naip1_features.device
+        logits_per_1, logits_per_2 = self.get_logits(naip1_features, naip2_features, logit_scale)
+
+        labels = self.get_ground_truth(device, logits_per_1.shape[0])
 
         total_loss = (
-            F.cross_entropy(logits_per_s2, labels) +
-            F.cross_entropy(logits_per_naip, labels)
+            F.cross_entropy(logits_per_1, labels) +
+            F.cross_entropy(logits_per_2, labels)
         ) / 2
 
         return {"contrastive_loss": total_loss} if output_dict else total_loss
@@ -158,9 +158,9 @@ class CoCaLoss(ClipLoss):
         self.caption_loss = nn.CrossEntropyLoss(ignore_index=pad_id)
 
     def forward(self, image_features, text_features, logits, labels, logit_scale, output_dict=False):
-        
+
         clip_loss = torch.tensor(0)
-        
+
         if self.clip_loss_weight:
             clip_loss = super().forward(image_features, text_features, logit_scale)
             clip_loss = self.clip_loss_weight * clip_loss

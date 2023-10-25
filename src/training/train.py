@@ -42,8 +42,8 @@ class AverageMeter(object):
 
 def postprocess_clip_output(model_out):
     return {
-        "s2_features": model_out[0],
-        "naip_features": model_out[1],
+        "naip1_features": model_out[0],
+        "naip2_features": model_out[1],
         "logit_scale": model_out[2]
     }
 
@@ -80,7 +80,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     sample_digits = math.ceil(math.log(num_samples + 1, 10))
 
     if args.accum_freq > 1:
-        accum_s2_images, accum_naip_images, accum_features = [], [], {}
+        accum_naip1_images, accum_naip2_images, accum_features = [], [], {}
 
     losses_m = {}
     batch_time_m = AverageMeter()
@@ -93,23 +93,18 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         if not args.skip_scheduler:
             scheduler(step)
 
-        s2_images, naip_images = batch
-        s2_images = s2_images.to(device=device, dtype=input_dtype)  #, non_blocking=True)
-        naip_images = naip_images.to(device=device, dtype=input_dtype)  #, non_blocking=True)
+        naip1_images, naip2_images = batch
+        naip1_images = naip1_images.to(device=device, dtype=input_dtype)
+        naip2_images = naip2_images.to(device=device, dtype=input_dtype)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
 
-        batch_size = len(s2_images)
+        batch_size = len(naip1_images)
         if args.accum_freq == 1:
             with autocast():
-                model_out = model(s2_images, naip_images)
+                model_out = model(naip1_images, naip2_images)
                 logit_scale = model_out["logit_scale"]
-
-                #if args.distill:
-                #    with torch.no_grad():
-                #        dist_model_out = dist_model(s2_images, naip_images)
-                #    model_out.update({f'dist_{k}': v for k, v in dist_model_out.items()})
 
                 losses = loss(**model_out, output_dict=True)
                 total_loss = sum(losses.values())
@@ -118,14 +113,14 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             backward(total_loss, scaler)
 
             del total_loss
-            del s2_images
-            del naip_images
+            del naip1_images
+            del naip2_images
             del model_out
         else:
             # First, cache the features without any gradient tracking.
             with torch.no_grad():
                 with autocast():
-                    model_out = model(s2_images, naip_images)
+                    model_out = model(naip1_images, naip2_images)
 
                     for f in ("logit_scale", "logit_bias"):
                         model_out.pop(f, None)
@@ -136,9 +131,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                         else:
                             accum_features[key] = [val]
 
-                accum_s2_images.append(s2_images)
-                accum_naip_images.append(naip_images)
-                #accum_texts.append(texts)
+                accum_naip1_images.append(naip1_images)
+                accum_naip2_images.append(naip2_images)
 
             # If (i + 1) % accum_freq is not zero, move on to the next batch.
             if ((i + 1) % args.accum_freq) > 0:
@@ -150,11 +144,10 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             # Call backwards each time, but only step optimizer at the end.
             optimizer.zero_grad()
             for j in range(args.accum_freq):
-                s2_images = accum_s2_images[j]
-                naip_images = accum_naip_images[j]
-                #texts = accum_texts[j]
+                naip1_images = accum_naip1_images[j]
+                naip2_images = accum_naip2_images[j]
                 with autocast():
-                    model_out = model(s2_images, naip_images)
+                    model_out = model(naip1_images, naip2_images)
 
                     inputs_no_accum = {}
                     inputs_no_accum["logit_scale"] = logit_scale = model_out.pop("logit_scale")
@@ -218,7 +211,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             logit_scale_scalar = logit_scale.item()
             loss_log = " ".join(
                 [
-                    f"{loss_name.capitalize()}: {loss_m.val:#.5g} ({loss_m.avg:#.5g})" 
+                    f"{loss_name.capitalize()}: {loss_m.val:#.5g} ({loss_m.avg:#.5g})"
                     for loss_name, loss_m in losses_m.items()
                 ]
             )
@@ -240,7 +233,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 "samples_per_second_per_gpu": samples_per_second_per_gpu,
                 "scale": logit_scale_scalar,
                 "lr": optimizer.param_groups[0]["lr"]
-            }            
+            }
             log_data.update({name:val.val for name,val in losses_m.items()})
 
             log_data = {"train/" + name: val for name, val in log_data.items()}
@@ -248,12 +241,12 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             if tb_writer is not None:
                 for name, val in log_data.items():
                     tb_writer.add_scalar(name, val, step)
-            
+
             if args.wandb:
                 assert wandb is not None, 'Please install wandb.'
                 log_data['step'] = step  # for backwards compatibility
                 wandb.log(log_data, step=step)
-            
+
             # resetting batch / data time meters per log window
             batch_time_m.reset()
             data_time_m.reset()
@@ -288,31 +281,31 @@ def evaluate(model, data, epoch, args, tb_writer=None):
         # all_image_features @ all_text_features will blow up memory and compute very quickly
         cumulative_loss = 0.0
         cumulative_gen_loss = 0.0
-        all_s2_features, all_naip_features = [], []
+        all_naip1_features, all_naip2_features = [], []
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
-                s2, naip = batch
-                s2 = s2.to(device=device, dtype=input_dtype, non_blocking=True)
-                naip = naip.to(device=device, non_blocking=True)
+                naip1, naip2 = batch
+                naip1 = naip1.to(device=device, non_blocking=True)
+                naip2 = naip2.to(device=device, non_blocking=True)
 
                 with autocast():
-                    model_out = model(s2, naip)
-                    s2_features = model_out["s2_features"]
-                    naip_features = model_out["naip_features"]
+                    model_out = model(naip1, naip2)
+                    naip1_features = model_out["naip1_features"]
+                    naip2_features = model_out["naip2_features"]
                     logit_scale = model_out["logit_scale"]
                     # features are accumulated in CPU tensors, otherwise GPU memory exhausted quickly
                     # however, system RAM is easily exceeded and compute time becomes problematic
-                    all_s2_features.append(s2_features.cpu())
-                    all_naip_features.append(naip_features.cpu())
+                    all_naip1_features.append(naip1_features.cpu())
+                    all_naip2_features.append(naip2_features.cpu())
                     logit_scale = logit_scale.mean()
-                    logits_per_s2 = logit_scale * s2_features @ naip_features.t()
-                    logits_per_naip = logits_per_s2.t()
+                    logits_per_1 = logit_scale * naip1_features @ naip2_features.t()
+                    logits_per_2 = logits_per_1.t()
 
-                    batch_size = s2.shape[0]
+                    batch_size = naip1.shape[0]
                     labels = torch.arange(batch_size, device=device).long()
                     total_loss = (
-                        F.cross_entropy(logits_per_s2, labels) +
-                        F.cross_entropy(logits_per_naip, labels)
+                        F.cross_entropy(logits_per_1, labels) +
+                        F.cross_entropy(logits_per_2, labels)
                     ) / 2
 
                     gen_loss = maybe_compute_generative_loss(model_out)
@@ -330,8 +323,8 @@ def evaluate(model, data, epoch, args, tb_writer=None):
                             f"Generative Loss: {cumulative_gen_loss / num_samples:.6f}\t")
 
             val_metrics = get_clip_metrics(
-                s2_features=torch.cat(all_s2_features),
-                naip_features=torch.cat(all_naip_features),
+                naip1_features=torch.cat(all_naip1_features),
+                naip2_features=torch.cat(all_naip2_features),
                 logit_scale=logit_scale.cpu(),
             )
             loss = cumulative_loss / num_samples
@@ -377,13 +370,13 @@ def evaluate(model, data, epoch, args, tb_writer=None):
     return metrics
 
 
-def get_clip_metrics(s2_features, naip_features, logit_scale):
+def get_clip_metrics(naip1_features, naip2_features, logit_scale):
     metrics = {}
-    logits_per_s2 = (logit_scale * s2_features @ naip_features.t()).detach().cpu()
-    logits_per_naip = logits_per_s2.t().detach().cpu()
+    logits_per_1 = (logit_scale * naip1_features @ naip2_features.t()).detach().cpu()
+    logits_per_2 = logits_per_1.t().detach().cpu()
 
-    logits = {"s2_to_naip": logits_per_s2, "naip_to_s2": logits_per_naip}
-    ground_truth = torch.arange(len(naip_features)).view(-1, 1)
+    logits = {"naip1_to_naip2": logits_per_1, "naip2_to_naip1": logits_per_2}
+    ground_truth = torch.arange(len(naip2_features)).view(-1, 1)
 
     for name, logit in logits.items():
         ranking = torch.argsort(logit, descending=True)

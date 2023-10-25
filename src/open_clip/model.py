@@ -83,71 +83,6 @@ def get_input_dtype(precision: str):
         input_dtype = torch.float16
     return input_dtype
 
-
-def _build_s2_vision_tower(
-        embed_dim: int,
-        vision_cfg: CLIPVisionCfg,
-        quick_gelu: bool = False,
-        cast_dtype: Optional[torch.dtype] = None
-):
-    if isinstance(vision_cfg, dict):
-        vision_cfg = CLIPVisionCfg(**vision_cfg)
-
-    # OpenAI models are pretrained w/ QuickGELU but native nn.GELU is both faster and more
-    # memory efficient in recent PyTorch releases (>= 1.10).
-    # NOTE: timm models always use native GELU regardless of quick_gelu flag.
-    act_layer = QuickGELU if quick_gelu else nn.GELU
-
-    """
-    if vision_cfg.timm_model_name:
-        visual = TimmModel(
-            vision_cfg.timm_model_name,
-            pretrained=vision_cfg.timm_model_pretrained,
-            pool=vision_cfg.timm_pool,
-            proj=vision_cfg.timm_proj,
-            proj_bias=vision_cfg.timm_proj_bias,
-            drop=vision_cfg.timm_drop,
-            drop_path=vision_cfg.timm_drop_path,
-            patch_drop=vision_cfg.patch_dropout if vision_cfg.patch_dropout > 0 else None,
-            embed_dim=embed_dim,
-            image_size=vision_cfg.image_size,
-        )
-    elif isinstance(vision_cfg.layers, (tuple, list)):
-        vision_heads = vision_cfg.width * 32 // vision_cfg.head_width
-        visual = ModifiedResNet(
-            layers=vision_cfg.layers,
-            output_dim=embed_dim,
-            heads=vision_heads,
-            image_size=vision_cfg.image_size,
-            width=vision_cfg.width,
-        )
-    else:
-    """
-    vision_heads = vision_cfg.width // vision_cfg.head_width
-    norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat16) else LayerNorm
-    visual = VisionTransformer(
-        image_size=32, #vision_cfg.image_size,
-        patch_size=4, #vision_cfg.patch_size,
-        width=192, #vision_cfg.width,
-        layers=12, #vision_cfg.layers,
-        heads=vision_heads,
-        mlp_ratio=vision_cfg.mlp_ratio,
-        ls_init_value=vision_cfg.ls_init_value,
-        patch_dropout=vision_cfg.patch_dropout,
-        input_patchnorm=vision_cfg.input_patchnorm,
-        global_average_pool=vision_cfg.global_average_pool,
-        attentional_pool=vision_cfg.attentional_pool,
-        n_queries=vision_cfg.n_queries,
-        attn_pooler_heads=vision_cfg.attn_pooler_heads,
-        output_tokens=vision_cfg.output_tokens,
-        output_dim=embed_dim,
-        act_layer=act_layer,
-        norm_layer=norm_layer,
-        in_channels=3  # try a sequence of 8 RGB S2 images
-    )
-
-    return visual
-
 def _build_naip_vision_tower(
         embed_dim: int,
         vision_cfg: CLIPVisionCfg,
@@ -161,7 +96,7 @@ def _build_naip_vision_tower(
     # memory efficient in recent PyTorch releases (>= 1.10).
     # NOTE: timm models always use native GELU regardless of quick_gelu flag.
     act_layer = QuickGELU if quick_gelu else nn.GELU
-    
+
     """
     if vision_cfg.timm_model_name:
         visual = TimmModel(
@@ -318,7 +253,6 @@ class CLIP(nn.Module):
     def __init__(
             self,
             embed_dim: int,
-            s2_vision_cfg: CLIPVisionCfg,
             naip_vision_cfg: CLIPVisionCfg,
             quick_gelu: bool = False,
             init_logit_scale: float = np.log(1 / 0.07),
@@ -330,20 +264,7 @@ class CLIP(nn.Module):
         self.output_dict = output_dict
 
         embed_dim = 512
-        self.s2_visual = _build_s2_vision_tower(embed_dim, s2_vision_cfg, quick_gelu, cast_dtype)
-        self.naip_visual = _build_naip_vision_tower(embed_dim, naip_vision_cfg, quick_gelu, cast_dtype)
-
-        """
-        text = _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype)
-        self.transformer = text.transformer
-        self.context_length = text.context_length
-        self.vocab_size = text.vocab_size
-        self.token_embedding = text.token_embedding
-        self.positional_embedding = text.positional_embedding
-        self.ln_final = text.ln_final
-        self.text_projection = text.text_projection
-        self.register_buffer('attn_mask', text.attn_mask, persistent=False)
-        """
+        self.visual = _build_naip_vision_tower(embed_dim, naip_vision_cfg, quick_gelu, cast_dtype)
 
         self.logit_scale = nn.Parameter(torch.ones([]) * init_logit_scale)
         if init_logit_bias is not None:
@@ -360,45 +281,31 @@ class CLIP(nn.Module):
         self.visual.set_grad_checkpointing(enable)
         self.transformer.grad_checkpointing = enable
 
-    def encode_s2(self, image, normalize: bool = False):
-        features = self.s2_visual(image)
+    def encode_image(self, image, normalize: bool = False):
+        features = self.visual(image)
         return F.normalize(features, dim=-1) if normalize else features
 
     def encode_naip(self, image, normalize: bool = False):
-        features = self.naip_visual(image)
+        features = self.visual(image)
         return F.normalize(features, dim=-1) if normalize else features
 
-    """
-    def encode_text(self, text, normalize: bool = False):
-        cast_dtype = self.transformer.get_cast_dtype()
-
-        x = self.token_embedding(text).to(cast_dtype)  # [batch_size, n_ctx, d_model]
-
-        x = x + self.positional_embedding.to(cast_dtype)
-        x = x.permute(1, 0, 2)  # NLD -> LND
-        x = self.transformer(x, attn_mask=self.attn_mask)
-        x = x.permute(1, 0, 2)  # LND -> NLD
-        x = self.ln_final(x)  # [batch_size, n_ctx, transformer.width]
-        # take features from the eot embedding (eot_token is the highest number in each sequence)
-        x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection
-        return F.normalize(x, dim=-1) if normalize else x
-    """
+    def encode_s2(self, image, normalize: bool = False):
+        features = self.visual(image)
+        return F.normalize(features, dim=-1) if normalize else features
 
     def forward(
             self,
-            s2: Optional[torch.Tensor] = None,
-            naip: Optional[torch.Tensor] = None,
+            naip1: Optional[torch.Tensor] = None,
+            naip2: Optional[torch.Tensor] = None,
     ):
-        s2_features = self.encode_s2(s2, normalize=True) if s2 is not None else None
-        naip_features = self.encode_naip(naip, normalize=True) if naip is not None else None
-        #text_features = self.encode_text(text, normalize=True) if text is not None else None
+        naip1_features = self.encode_image(naip1, normalize=True) if naip1 is not None else None
+        naip2_features = self.encode_image(naip2, normalize=True) if naip2 is not None else None
 
         if self.output_dict:
             out_dict = {
-                "s2_features": s2_features,
-                "naip_features": naip_features,
-                #"text_features": text_features,
-                "logit_scale": self.logit_scale.exp()
+                "naip1_features": naip1_features,
+                "naip2_features": naip2_features,
+                "logit_scale": self.logit_scale.exp(),
             }
             if self.logit_bias is not None:
                 out_dict['logit_bias'] = self.logit_bias
@@ -406,11 +313,9 @@ class CLIP(nn.Module):
             return out_dict
 
         if self.logit_bias is not None:
-            return s2_features, naip_features, self.logit_scale.exp(), self.logit_bias
-            #return image_features, text_features, self.logit_scale.exp(), self.logit_bias
+            return naip1_features, naip2_features, self.logit_scale.exp(), self.logit_bias
 
-        return s2_features, naip_features, self.logit_scale.exp()
-        #return image_features, text_features, self.logit_scale.exp()
+        return naip1_features, naip2_features, self.logit_scale.exp()
 
 class CustomTextCLIP(nn.Module):
     output_dict: torch.jit.Final[bool]
@@ -564,12 +469,6 @@ def build_model_from_openai_state_dict(
     transformer_heads = transformer_width // 64
     transformer_layers = len(set(k.split(".")[2] for k in state_dict if k.startswith(f"transformer.resblocks")))
 
-    s2_vision_cfg = CLIPVisionCfg(
-        layers=vision_layers,
-        width=vision_width,
-        patch_size=vision_patch_size,
-        image_size=image_size,
-    )
     naip_vision_cfg = CLIPVisionCfg(
         layers=vision_layers,
         width=vision_width,
@@ -585,7 +484,6 @@ def build_model_from_openai_state_dict(
     #)
     model = CLIP(
         embed_dim,
-        s2_vision_cfg=s2_vision_cfg,
         naip_vision_cfg=naip_vision_cfg,
         quick_gelu=quick_gelu,  # OpenAI models were trained with QuickGELU
         cast_dtype=cast_dtype,

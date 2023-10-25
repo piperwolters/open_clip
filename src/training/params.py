@@ -32,6 +32,12 @@ def parse_args(args):
         help="Path to file(s) with training data. When using webdataset, multiple datasources can be combined using the `::` separator.",
     )
     parser.add_argument(
+        "--train-mode",
+        type=str,
+        default=None,
+        help="Train mode either ssr or naip",
+    )
+    parser.add_argument(
         "--train-data-upsampling-factors",
         type=str,
         default=None,
