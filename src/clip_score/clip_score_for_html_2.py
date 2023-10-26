@@ -1,8 +1,10 @@
 import os
 import sys
 import cv2
+import timm
 import glob
 import clip
+import json
 import lpips
 import torch
 import skimage.io
@@ -20,11 +22,25 @@ sys.path.append('/data/piperw/open_clip_naipnaip/open_clip/src/')
 from infer_utils import sr_infer
 from open_clip.model import CLIP, CLIPVisionCfg
 
+sys.path.append('/data/piperw/satlas-projects/satlas/')
+from satlas.model.model import Model
+
 
 device = torch.device('cuda')
 
 # Load pretrained CLIP (normal CLIP)
 actual_clip_model, preprocess = clip.load("ViT-B/32", device=device)
+
+# Load pretrained SigLIP (using open_clip)
+#siglip_model, siglip_preprocess = create_model_from_pretrained('hf-hub:ViT-B-16-SigLIP')
+# Load pretrained SigLIP (using timm)
+siglip_model = timm.create_model(
+    'vit_base_patch16_siglip_224',
+    pretrained=True,
+    num_classes=0,
+).eval().to(device)
+data_config = timm.data.resolve_model_data_config(siglip_model)
+siglip_transforms = timm.data.create_transform(**data_config, is_training=False)
 
 # LPIPS perceptual losses / scores
 loss_fn_alex = lpips.LPIPS(net='alex').to(device) # best forward scores
@@ -38,13 +54,13 @@ dinov2_vitg14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14').to(de
 naip_info = {}
 naip_vision_cfg = CLIPVisionCfg(**naip_info)
 
-# Initialize the SAT-CLIP model.
+# Initialize the NAIP-CLIP model.
 naip_clip_model = CLIP(
             embed_dim=512,
             naip_vision_cfg=naip_vision_cfg,
         ).to(device)
 
-# Load the pretrained SAT-CLIP checkpoint. Load weights into model.
+# Load the pretrained NAIP-CLIP checkpoint. Load weights into model.
 weights_path = '/data/piperw/open_clip_naipnaip/open_clip/epoch_97.pt'
 weights_dict = torch.load(weights_path)
 state_dict = weights_dict['state_dict']
@@ -54,15 +70,33 @@ for k,v in state_dict.items():
 naip_clip_model.load_state_dict(new_state_dict)
 naip_clip_model.eval()
 
+# Satlas model
+satlas_cfg_path = '/data/piperw/satlas-projects/satlas/old_mi.txt'
+with open(satlas_cfg_path, 'r') as f:
+    satlas_cfg = json.load(f)
+satlas_model = Model({'config': satlas_cfg['Model'], 'channels': ['tci'], 'tasks': satlas_cfg['Tasks']}).to(device)
+satlas_weights_path = '/data/piperw/satlas-projects/satlas/satlas.pth'
+satlas_weights = torch.load(satlas_weights_path)
+satlas_model.load_state_dict(satlas_weights, strict=False)
+satlas_backbone = satlas_model.backbone
+satlas_intermediates = satlas_model.intermediates
+
 
 #### This loop is specific to the html vis - uses the folder compare/ containing numbered examples with various outputs in each ####
 #### Version 2 because chaos ####
+results = {}
+
 d = '/data/piperw/data/results_mturk_urban/'
 for i in os.listdir(d):
-    print('i:', i)
+    if i == '__pycache__':
+        continue
+    if not os.path.isdir(d+i):
+        continue
+
+    print('Processing.....', i)
+    results[str(i)] = {}
 
     s = d + i + '/'
-    print("s:", s)
 
     # Filepaths for all the results 
     hr = os.path.join(str(s), 'naip.png')
@@ -107,10 +141,12 @@ for i in os.listdir(d):
     psnrs = []
     ssims = []
     for o in outputs:
-        psnr = round(calculate_psnr(hr_im, o, 0), 4)
-        ssim = round(calculate_ssim(hr_im, o, 0), 4)
+        psnr = round(calculate_psnr(hr_im, o, 0), 3)
+        ssim = round(calculate_ssim(hr_im, o, 0), 3)
         psnrs.append(psnr)
         ssims.append(ssim)
+    results[str(i)]['psnr'] = psnrs
+    results[str(i)]['ssim'] = ssims
 
     # Compute Perceptual Metric with alexnet and vgg
     alexs = []
@@ -122,8 +158,10 @@ for i in os.listdir(d):
     for o_tensor in output_tensors:
         alex = loss_fn_alex(hr_tensor, o_tensor)
         vgg = loss_fn_vgg(hr_tensor, o_tensor)
-        alexs.append(alex.item())
-        vggs.append(vgg.item())
+        alexs.append(round(alex.item(), 3))
+        vggs.append(round(vgg.item(), 3))
+    results[str(i)]['lpips_alex'] = alexs
+    results[str(i)]['lpips_vgg'] = vggs
 
     # Compute similarity scores between NAIP & model output features, using CLIP (actual CLIP)
     naip_im = preprocess(Image.open(hr)).unsqueeze(0).to(device)
@@ -131,27 +169,34 @@ for i in os.listdir(d):
     clip_scores = []
     for bp in base_paths:
         out_im = preprocess(Image.open(bp)).unsqueeze(0).to(device)
-        print(out_im.shape, naip_im.shape)
         out_feats = actual_clip_model.encode_image(out_im)
-        print(out_feats.shape, naip_feats.shape)
-        print("ranges of out:", torch.min(out_im), torch.max(out_im))
-        print("ranges of hr:", torch.min(naip_im), torch.max(naip_im))
-        sim = str(F.cosine_similarity(naip_feats, out_feats).detach().item())
-        print("sim:", sim)
+        sim = str(round(F.cosine_similarity(naip_feats, out_feats).detach().item(), 3))
         clip_scores.append(sim)
+    results[str(i)]['clip'] = clip_scores
 
     # Compute similarity scores between NAIP and model output features, using NAIP-NAIP-CLIP
     naip_clip_scores = []
     naip_feat = naip_clip_model.encode_image(hr_tensor)
     for o_tensor in output_tensors:
         o_feat = naip_clip_model.encode_image(o_tensor)
-
-        sim = str(F.cosine_similarity(naip_feat, o_feat).detach().item())
-        print("sim:", sim)
+        sim = str(round(F.cosine_similarity(naip_feat, o_feat).detach().item(), 3))
         naip_clip_scores.append(sim)
+    results[str(i)]['naip_clip'] = naip_clip_scores
+
+    # Compute similarity scores between NAIP and model output features, using SigLIP
+    siglip_scores = []
+    pil_hr = Image.open(hr)
+    naip_siglip = siglip_transforms(pil_hr).unsqueeze(0).to(device)
+    naip_feat = siglip_model(naip_siglip)
+    for bp in base_paths:
+        pil_o = Image.open(bp)
+        o_siglip = siglip_transforms(pil_o).unsqueeze(0).to(device)
+        o_feat = siglip_model(o_siglip)
+        sim = str(round(F.cosine_similarity(naip_feat, o_feat).detach().item(), 3))
+        siglip_scores.append(sim)
+    results[str(i)]['siglip'] = siglip_scores
 
     # Compute similarity scores between NAIP and model output features, using DinoVs
-    dinov2_vitg14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14')
     hr_resized = torch.nn.functional.interpolate(hr_tensor, (126,126))
     dino_scores = []
     for o_tensor in output_tensors:
@@ -161,10 +206,36 @@ for i in os.listdir(d):
         hr_feat = dinov2_vitg14(hr_resized)
         o_feat = dinov2_vitg14(o_resized)
 
-        sim = str(F.cosine_similarity(hr_feat, o_feat).detach().item())
+        sim = str(round(F.cosine_similarity(hr_feat, o_feat).detach().item(), 3))
         dino_scores.append(sim)
+    results[str(i)]['dino'] = dino_scores
+
+    # Compute similarity scores between NAIP and model output features, using Satlas
+    hr_tensor = torch.permute(torch.tensor(hr_im), (2, 0, 1)).unsqueeze(0).float().to(device)
+    hr_backbone = satlas_backbone(hr_tensor)
+    hr_intermed = satlas_intermediates(hr_backbone)
+    satlas_backbone0_scores, satlas_backbone3_scores = [], []
+    satlas_intermed0_scores, satlas_intermed8_scores = [], []
+    for o in outputs:
+        o_tensor = torch.permute(torch.tensor(o), (2, 0, 1)).unsqueeze(0).float().to(device)
+        o_backbone = satlas_backbone(o_tensor)
+        o_intermed = satlas_intermediates(o_backbone)
+
+        sim_backbone0 = str(round(torch.mean(F.cosine_similarity(hr_backbone[0], o_backbone[0])).detach().item(), 3))
+        sim_backbone3 = str(round(torch.mean(F.cosine_similarity(hr_backbone[3], o_backbone[3])).detach().item(), 3))
+        sim_intermed0 = str(round(torch.mean(F.cosine_similarity(hr_intermed[0], o_intermed[0])).detach().item(), 3))
+        sim_intermed8 = str(round(torch.mean(F.cosine_similarity(hr_intermed[8], o_intermed[8])).detach().item(), 3))
+
+        satlas_backbone0_scores.append(sim_backbone0)
+        satlas_backbone3_scores.append(sim_backbone3)
+        satlas_intermed0_scores.append(sim_intermed0)
+        satlas_intermed8_scores.append(sim_intermed8)
+
+    results[str(i)]['satlas_bck0'] = satlas_backbone0_scores
+    results[str(i)]['satlas_bck3'] = satlas_backbone3_scores
+    results[str(i)]['satlas_int0'] = satlas_intermed0_scores
+    results[str(i)]['satlas_int8'] = satlas_intermed8_scores
 
 
-    with open(base_path + '/cos_sims.txt', 'w') as f:
-        f.write(s2_naip+', '+s2_high+', '+s2_sr3+', '+s2_gan+', '+clip_s2_high+', '+clip_s2_sr3+', '+clip_s2_gan)
-
+with open('results.json', 'w') as json_file:
+    json.dump(results, json_file)

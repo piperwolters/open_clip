@@ -26,6 +26,7 @@ naip_dir = '/data/piperw/data/small_held_out_set/naip_128/'
 naip_pngs = glob.glob(naip_dir + "*/tci/*.png")
 s2_dir = '/data/piperw/data/small_held_out_set/s2_condensed/'
 
+"""
 # SAT-CLIP model config info.
 s2_info = {}
 s2_vision_cfg = CLIPVisionCfg(**s2_info)
@@ -38,12 +39,50 @@ sat_clip_model = CLIP(
             s2_vision_cfg=s2_vision_cfg, 
             naip_vision_cfg=naip_vision_cfg,
         ).to(device)
+"""
 
 # Intialize the Super-Res model. In this case, using ESRGAN.
 sr_model = RRDBNet(num_in_ch=24, num_out_ch=3, num_feat=128, num_block=23, num_grow_ch=64, scale=4).to(device)
 
 # Load pretrained CLIP (normal CLIP)
 actual_clip_model, preprocess = clip.load("ViT-B/16", device=device)
+
+# Load pretrained SigLIP (using timm)
+siglip_model = timm.create_model(
+    'vit_base_patch16_siglip_224',
+    pretrained=True,
+    num_classes=0,
+).eval().to(device)
+data_config = timm.data.resolve_model_data_config(siglip_model)
+siglip_transforms = timm.data.create_transform(**data_config, is_training=False)
+
+# LPIPS perceptual losses / scores
+loss_fn_alex = lpips.LPIPS(net='alex').to(device) # best forward scores
+loss_fn_vgg = lpips.LPIPS(net='vgg').to(device) # closer to "traditional" perceptual loss, when used for optimization
+
+# Initiatialize the DinoV2 model
+dinov2_vitg14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14').to(device)
+
+# NAIP-NAIP-CLIP 
+# SAT-CLIP model config info.
+naip_info = {}
+naip_vision_cfg = CLIPVisionCfg(**naip_info)
+
+# Initialize the NAIP-CLIP model.
+naip_clip_model = CLIP(
+            embed_dim=512,
+            naip_vision_cfg=naip_vision_cfg,
+        ).to(device)
+
+# Load the pretrained NAIP-CLIP checkpoint. Load weights into model.
+weights_path = '/data/piperw/open_clip_naipnaip/open_clip/epoch_97.pt'
+weights_dict = torch.load(weights_path)
+state_dict = weights_dict['state_dict']
+new_state_dict = {}
+for k,v in state_dict.items():
+    new_state_dict[k.replace('module.', '')] = v
+naip_clip_model.load_state_dict(new_state_dict)
+naip_clip_model.eval()
 
 # Big dict of results
 results = {}
@@ -126,6 +165,8 @@ for sc_chkpt in range(1, 16):
             sim_score = F.cosine_similarity(naip_feats, sr_feats)
             clip_results.append(sim_score.item())
             """
+
+            
 
         # Take average over the test set scores and metrics
         results[sc_chkpt][sr_chkpt] = [(sum(idx_results) / len(idx_results)).item()] #, sum(psnrs) / len(psnrs), sum(ssims) / len(ssims)]
