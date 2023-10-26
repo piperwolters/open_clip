@@ -13,6 +13,7 @@ import torch.nn.functional as F
 import torchvision
 import matplotlib
 import matplotlib.pyplot as plt
+from statistics import mean
 from PIL import Image
 
 from metrics import *
@@ -81,26 +82,18 @@ satlas_model.load_state_dict(satlas_weights, strict=False)
 satlas_backbone = satlas_model.backbone
 satlas_intermediates = satlas_model.intermediates
 
-# Big dict of results. Going to save the average scores where some model1 is on left and some model2 is on right.
-# Need all combinations of this in the results dict and initialized.  NOTE: 'hr_x4','hr_x8','hr_x16' are not included
-results = {}
 metric_names = ['psnr', 'ssim', 'lpips_alex', 'lpips_vgg', 'clip', 'naip_clip', 'siglip', 'dino', 'satlas_backbone', 'satlas_fpn']
 model_names = ['srcnn','highresnet','sr3','sr3_cfg','esrgan_satlas','esrgan_satlas_chkpt5k',
                 'esrgan_satlas_chkpt50k','esrgan_osm','esrgan_osm_chkpt5k','esrgan_osm_chkpt50k']
-for m1 in model_names:
-    for m2 in model_names:
-        if m1 == m2:
-            continue
-        results[m1 + '-' + m2] = {}
-        results[m1 + '-' + m2][m1] = {}
-        results[m1 + '-' + m2][m2] = {}
-        for metric in metric_names:
-            results[m1 + '-' + m2][m1][metric] = []
-            results[m1 + '-' + m2][m2][metric] = []
 
+correct = {mn: 0 for mn in metric_names}
+print(correct)
 print("Iterating through ", len(annots.items()), " datapoints.")
 for idx,(chip, d) in enumerate(annots.items()):
     print("Processing...", idx)
+
+    human_answers = d['answers']
+    avg_human = mean(human_answers)
 
     model1_name = d['model1']
     model2_name = d['model2']
@@ -124,10 +117,10 @@ for idx,(chip, d) in enumerate(annots.items()):
     ssim_model1 = calculate_ssim(naip_im, model1_im, 0)
     psnr_model2 = calculate_psnr(naip_im, model2_im, 0)
     ssim_model2 = calculate_ssim(naip_im, model2_im, 0)
-    results[model1_name + '-' + model2_name][model1_name]['psnr'].append(psnr_model1)
-    results[model1_name + '-' + model2_name][model1_name]['ssim'].append(ssim_model1)
-    results[model1_name + '-' + model2_name][model2_name]['psnr'].append(psnr_model2)
-    results[model1_name + '-' + model2_name][model2_name]['ssim'].append(ssim_model2)
+    if ( avg_human < 1 ) == (psnr_model1 > psnr_model2):
+        correct['psnr'] += 1
+    if ( avg_human < 1 ) == (ssim_model1 > ssim_model2):
+        correct['ssim'] += 1
 
     # LPIPS
     normalized_naip = 2*(naip_im - np.amin(naip_im)) / (np.amax(naip_im) - np.amin(naip_im))-1
@@ -136,15 +129,14 @@ for idx,(chip, d) in enumerate(annots.items()):
     m1_tensor = torch.tensor(np.transpose(normalized_m1, (2, 0, 1))).unsqueeze(0).float().to(device)
     normalized_m2 = 2*(model2_im - np.amin(model2_im)) / (np.amax(model2_im) - np.amin(model2_im))-1
     m2_tensor = torch.tensor(np.transpose(normalized_m2, (2, 0, 1))).unsqueeze(0).float().to(device)
-
     alex_model1 = loss_fn_alex(naip_tensor, m1_tensor).detach().item()
     vgg_model1 = loss_fn_vgg(naip_tensor, m1_tensor).detach().item()
     alex_model2 = loss_fn_alex(naip_tensor, m2_tensor).detach().item()
     vgg_model2 = loss_fn_vgg(naip_tensor, m2_tensor).detach().item()
-    results[model1_name + '-' + model2_name][model1_name]['lpips_alex'].append(alex_model1)
-    results[model1_name + '-' + model2_name][model1_name]['lpips_vgg'].append(vgg_model1)
-    results[model1_name + '-' + model2_name][model2_name]['lpips_alex'].append(alex_model2)
-    results[model1_name + '-' + model2_name][model2_name]['lpips_vgg'].append(vgg_model2)
+    if ( avg_human < 1 ) == (alex_model1 > alex_model2):
+        correct['lpips_alex'] += 1
+    if ( avg_human < 1 ) == (vgg_model1 > vgg_model2):
+        correct['lpips_vgg'] += 1
 
     # CLIP
     naip_tensor2 = preprocess(Image.open(naip_fp)).unsqueeze(0).to(device)
@@ -155,8 +147,8 @@ for idx,(chip, d) in enumerate(annots.items()):
     m2_feats = actual_clip_model.encode_image(m2_tensor2)
     clip_m1 = F.cosine_similarity(naip_feats, m1_feats).detach().item()
     clip_m2 = F.cosine_similarity(naip_feats, m2_feats).detach().item()
-    results[model1_name + '-' + model2_name][model1_name]['clip'].append(clip_m1)
-    results[model1_name + '-' + model2_name][model2_name]['clip'].append(clip_m2)
+    if ( avg_human < 1 ) == (clip_m1 > clip_m2):
+        correct['clip'] += 1
 
     # NAIP-CLIP 
     # these tensors are pulled from LPIPS code (normalized the same way)
@@ -165,8 +157,8 @@ for idx,(chip, d) in enumerate(annots.items()):
     m2_feat = naip_clip_model.encode_image(m2_tensor)
     naip_clip_m1 = F.cosine_similarity(naip_feat, m1_feat).detach().item()
     naip_clip_m2 = F.cosine_similarity(naip_feat, m2_feat).detach().item()
-    results[model1_name + '-' + model2_name][model1_name]['naip_clip'].append(naip_clip_m1)
-    results[model1_name + '-' + model2_name][model2_name]['naip_clip'].append(naip_clip_m2)
+    if ( avg_human < 1 ) == (naip_clip_m1 > naip_clip_m2):
+        correct['naip_clip'] += 1
 
     # SigLIP
     naip_pil = siglip_transforms(Image.open(naip_fp)).unsqueeze(0).to(device)
@@ -177,8 +169,8 @@ for idx,(chip, d) in enumerate(annots.items()):
     m2_feat = siglip_model(m2_pil)
     siglip_m1 = F.cosine_similarity(naip_feat, m1_feat).detach().item()
     siglip_m2 = F.cosine_similarity(naip_feat, m2_feat).detach().item()
-    results[model1_name + '-' + model2_name][model1_name]['siglip'].append(siglip_m1)
-    results[model1_name + '-' + model2_name][model2_name]['siglip'].append(siglip_m2)
+    if ( avg_human < 1 ) == (siglip_m1 > siglip_m2):
+        correct['siglip'] += 1
 
     # Dino-v2
     # these tensors are pulled from LPIPS code (normalized the same way)
@@ -190,8 +182,8 @@ for idx,(chip, d) in enumerate(annots.items()):
     m2_feat = dinov2_vitg14(m2_resized)
     dino_m1 = F.cosine_similarity(naip_feat, m1_feat).detach().item()
     dino_m2 = F.cosine_similarity(naip_feat, m2_feat).detach().item()
-    results[model1_name + '-' + model2_name][model1_name]['dino'].append(dino_m1)
-    results[model1_name + '-' + model2_name][model2_name]['dino'].append(dino_m2)
+    if ( avg_human < 1 ) == (dino_m1 > dino_m2):
+        correct['dino'] += 1
 
     # Satlas Backbone
     # these tensors are pulled from LPIPS code (normalized the same way)
@@ -200,8 +192,8 @@ for idx,(chip, d) in enumerate(annots.items()):
     m2_bck = satlas_backbone(m2_tensor)
     satbck_m1 = torch.mean(F.cosine_similarity(naip_bck[0], m1_bck[0])).detach().item()
     satbck_m2 = torch.mean(F.cosine_similarity(naip_bck[0], m2_bck[0])).detach().item()
-    results[model1_name + '-' + model2_name][model1_name]['satlas_backbone'].append(satbck_m1)
-    results[model1_name + '-' + model2_name][model2_name]['satlas_backbone'].append(satbck_m2)
+    if ( avg_human < 1 ) == (satbck_m1 > satbck_m2):
+        correct['satlas_backbone'] += 1
 
     # Satlas Intermediates
     naip_int = satlas_intermediates(naip_bck)
@@ -209,11 +201,7 @@ for idx,(chip, d) in enumerate(annots.items()):
     m2_int = satlas_intermediates(m2_bck)
     satint_m1 = torch.mean(F.cosine_similarity(naip_int[0], m1_int[0])).detach().item()
     satint_m2 = torch.mean(F.cosine_similarity(naip_int[0], m2_int[0])).detach().item()
-    results[model1_name + '-' + model2_name][model1_name]['satlas_fpn'].append(satint_m1)
-    results[model1_name + '-' + model2_name][model2_name]['satlas_fpn'].append(satint_m2)
+    if ( avg_human < 1 ) == (satint_m1 > satint_m2):
+        correct['satlas_fpn'] += 1
 
-
-# Once all runs have been computed, we want to save this dict to a json
-# and experiment with visualizing it as plots, in case something errors.
-with open('compare_mturk_to_metrics.json', 'w') as fp:
-    json.dump(results, fp)
+print(correct)
