@@ -64,9 +64,9 @@ class SSRDataset(data.Dataset):
         naip1 = skimage.io.imread(img_path1)
         naip2 = skimage.io.imread(img_path2)
 
-        img1 = totensor(self.transform_image(naip1)).type(torch.FloatTensor)
-        img2 = totensor(self.transform_image(naip2)).type(torch.FloatTensor)
-
+        images = self.transform_image(np.concatenate([naip1, naip2], axis=2))
+        img1 = totensor(images[:, :, 0:3])
+        img2 = totensor(images[:, :, 3:6])
         return img1, img2
 
     def __len__(self):
