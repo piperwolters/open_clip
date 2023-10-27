@@ -93,7 +93,9 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         if not args.skip_scheduler:
             scheduler(step)
 
-        naip1_images, naip2_images = batch
+        naip_images, good_images, bad_images = batch
+        naip1_images = torch.cat([naip_images, bad_images], dim=0)
+        naip2_images = torch.cat([good_images, bad_images], dim=0)
         naip1_images = naip1_images.to(device=device, dtype=input_dtype)
         naip2_images = naip2_images.to(device=device, dtype=input_dtype)
 

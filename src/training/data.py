@@ -552,15 +552,15 @@ def get_data(args, preprocess_fns, epoch=0, tokenizer=None):
 
     if args.train_data:
         opt = {
-            'naip_path': '/mnt/naip_contrast/images',
-            'image_list': '/mnt/naip_contrast/image_list_train.json',
+            'image_path': '/data/favyenb/superres_naip_human_feedback_finetune/images',
+            'example_ids': '/data/favyenb/superres_naip_human_feedback_finetune/train.json',
             'phase': 'train'
         }
         data['train'] = SSRDataset(opt)
     if args.val_data:
         opt = {
-            'naip_path': '/mnt/naip_contrast/images',
-            'image_list': '/mnt/naip_contrast/image_list_val.json',
+            'image_path': '/data/favyenb/superres_naip_human_feedback_finetune/images',
+            'example_ids': '/data/favyenb/superres_naip_human_feedback_finetune/val.json',
             'phase': 'val'
         }
         data['val'] = SSRDataset(opt)

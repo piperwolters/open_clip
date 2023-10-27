@@ -125,8 +125,8 @@ def _build_naip_vision_tower(
     vision_heads = vision_cfg.width // vision_cfg.head_width
     norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat16) else LayerNorm
     visual = VisionTransformer(
-        image_size=128, #vision_cfg.image_size,
-        patch_size=16, #vision_cfg.patch_size,
+        image_size=224, #vision_cfg.image_size,
+        patch_size=32, #vision_cfg.patch_size,
         width=768, #vision_cfg.width,
         layers=12, #vision_cfg.layers,
         heads=vision_heads,

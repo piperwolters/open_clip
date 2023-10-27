@@ -24,29 +24,17 @@ class SSRDataset(data.Dataset):
         self.n_s2_images = 1
 
         # Paths to Sentinel-2 and NAIP imagery.
-        self.naip_path = opt['naip_path']
-        self.image_list_fname = opt['image_list']
-        if not os.path.exists(self.naip_path):
-            raise Exception("Please make sure the paths to the data directories are correct.")
+        self.image_path = opt['image_path']
+        self.example_ids_fname = opt['example_ids']
 
-        self.tiles = {}
-        with open(self.image_list_fname, 'r') as f:
-            for col, row, image_id in json.load(f):
-                tile = (col, row)
-                if tile not in self.tiles:
-                    self.tiles[tile] = []
-                self.tiles[tile].append(image_id)
+        with open(self.example_ids_fname, 'r') as f:
+            self.example_ids = json.load(f)
 
-        for tile in list(self.tiles.keys()):
-            if len(self.tiles[tile]) < 2:
-                del self.tiles[tile]
-
-        self.datapoints = list(self.tiles.keys())
-
-        self.data_len = len(self.datapoints)
+        self.data_len = len(self.example_ids)
         print("Number of datapoints for split ", self.split, ": ", self.data_len)
 
     def transform_image(self, image):
+        image = skimage.transform.resize(image, (128, 128), preserve_range=True).astype(np.uint8)
         crop_size = random.randint(112, 128)
         i = random.randint(0, image.shape[0] - crop_size)
         j = random.randint(0, image.shape[1] - crop_size)
@@ -55,19 +43,12 @@ class SSRDataset(data.Dataset):
         return crop
 
     def __getitem__(self, index):
-        tile = self.datapoints[index]
-        image_ids = random.sample(self.tiles[tile], 2)
-        random.shuffle(image_ids)
-        img_path1 = os.path.join(self.naip_path, image_ids[0], 'tci', '{}_{}.png'.format(tile[0], tile[1]))
-        img_path2 = os.path.join(self.naip_path, image_ids[1], 'tci', '{}_{}.png'.format(tile[0], tile[1]))
-
-        naip1 = skimage.io.imread(img_path1)
-        naip2 = skimage.io.imread(img_path2)
-
-        img1 = totensor(self.transform_image(naip1)).type(torch.FloatTensor)
-        img2 = totensor(self.transform_image(naip2)).type(torch.FloatTensor)
-
-        return img1, img2
+        example_id = self.example_ids[index]
+        fnames = ['naip.png', 'good.png', 'bad.png']
+        img_paths = [os.path.join(self.image_path, example_id, fname) for fname in fnames]
+        ims = [skimage.io.imread(img_path) for img_path in img_paths]
+        ims = [totensor(self.transform_image(im)) for im in ims]
+        return ims[0], ims[1], ims[2]
 
     def __len__(self):
         return self.data_len

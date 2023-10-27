@@ -348,7 +348,10 @@ def main(args):
             logging.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})")
         else:
             # loading a bare (model only) checkpoint for fine-tune or evaluation
-            model.load_state_dict(checkpoint)
+            checkpoint = {'module.'+k: v for k, v in checkpoint.items()}
+            missing_keys, unexpected_keys = model.load_state_dict(checkpoint, strict=False)
+            print('missing: ', missing_keys)
+            print('unexpected: ', unexpected_keys)
             logging.info(f"=> loaded checkpoint '{args.resume}' (epoch {start_epoch})")
 
     # initialize datasets

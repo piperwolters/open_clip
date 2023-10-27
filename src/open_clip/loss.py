@@ -131,6 +131,81 @@ class ClipLoss(nn.Module):
         return {"contrastive_loss": total_loss} if output_dict else total_loss
 
 
+class FinetuneLoss(nn.Module):
+    def __init__(
+            self,
+            local_loss=False,
+            gather_with_grad=False,
+            cache_labels=False,
+            rank=0,
+            world_size=1,
+            use_horovod=False,
+    ):
+        super().__init__()
+        self.local_loss = local_loss
+        self.gather_with_grad = gather_with_grad
+        self.cache_labels = cache_labels
+        self.rank = rank
+        self.world_size = world_size
+        self.use_horovod = use_horovod
+
+        # cache state
+        self.prev_num_logits = 0
+        self.labels = {}
+
+    def get_ground_truth(self, device, num_logits) -> torch.Tensor:
+        # calculated ground-truth and cache if enabled
+        if self.prev_num_logits != num_logits or device not in self.labels:
+            labels = torch.arange(num_logits, device=device, dtype=torch.long)
+            if self.world_size > 1 and self.local_loss:
+                labels = labels + num_logits * self.rank
+            if self.cache_labels:
+                self.labels[device] = labels
+                self.prev_num_logits = num_logits
+        else:
+            labels = self.labels[device]
+        return labels
+
+    def get_logits(self, naip1_features, naip2_features, logit_scale):
+        if self.world_size > 1:
+            all_naip1_features, all_naip2_features = gather_features(
+                naip1_features, naip2_features,
+                self.local_loss, self.gather_with_grad, self.rank, self.world_size, self.use_horovod)
+
+            if self.local_loss:
+                logits_per_1 = logit_scale * naip1_features @ all_naip2_features.T
+                logits_per_2 = logit_scale * naip2_features @ all_naip1_features.T
+            else:
+                logits_per_1 = logit_scale * all_naip1_features @ all_naip2_features.T
+                logits_per_2 = logits_per_1.T
+        else:
+            logits_per_1 = logit_scale * naip1_features @ naip2_features.T
+            logits_per_2 = logit_scale * naip2_features @ naip1_features.T
+
+        return logits_per_1, logits_per_2
+
+    def forward(self, naip1_features, naip2_features, logit_scale, output_dict=False):
+        device = naip1_features.device
+        logits_per_1, logits_per_2 = self.get_logits(naip1_features, naip2_features, logit_scale)
+
+        labels = self.get_ground_truth(device, logits_per_1.shape[0])
+
+        # naip1_features is stack of [NAIP, bad-superres].
+        # naip2_features is stack of [good-superres, bad-superres].
+        # We want to push NAIP close to good-superres and far from bad-superres
+        # So for logits_per_1, we get rid of the bottom half (just keep NAIP).
+        # For logits_per_2, we just keep topleft (good-superres x NAIP).
+
+        batch_size = logits_per_1.shape[0] // 2
+
+        total_loss = (
+            F.cross_entropy(logits_per_1[0:batch_size, :], labels[0:batch_size]) +
+            F.cross_entropy(logits_per_2[0:batch_size, 0:batch_size], labels[0:batch_size])
+        ) / 2
+
+        return {"contrastive_loss": total_loss} if output_dict else total_loss
+
+
 class CoCaLoss(ClipLoss):
     def __init__(
             self,
@@ -340,75 +415,75 @@ class SigLipLoss(nn.Module):
             labels = 2 * torch.eye(num_logits, device=device, dtype=dtype) + labels
         return labels
 
-    def get_logits(self, image_features, text_features, logit_scale, logit_bias=None):
-        logits = logit_scale * image_features @ text_features.T
+    def get_logits(self, naip1_features, naip2_features, logit_scale, logit_bias=None):
+        logits = logit_scale * naip1_features @ naip2_features.T
         if logit_bias is not None:
             logits += logit_bias
         return logits
 
-    def _loss(self, image_features, text_features, logit_scale, logit_bias=None, negative_only=False):
-        logits = self.get_logits(image_features, text_features, logit_scale, logit_bias)
+    def _loss(self, naip1_features, naip2_features, logit_scale, logit_bias=None, negative_only=False):
+        logits = self.get_logits(naip1_features, naip2_features, logit_scale, logit_bias)
         labels = self.get_ground_truth(
-            image_features.device,
-            image_features.dtype,
-            image_features.shape[0],
+            naip1_features.device,
+            naip1_features.dtype,
+            naip1_features.shape[0],
             negative_only=negative_only,
         )
-        loss = -F.logsigmoid(labels * logits).sum() / image_features.shape[0]
+        loss = -F.logsigmoid(labels * logits).sum() / naip1_features.shape[0]
         return loss
 
-    def forward(self, image_features, text_features, logit_scale, logit_bias, output_dict=False):
-        loss = self._loss(image_features, text_features, logit_scale, logit_bias)
+    def forward(self, naip1_features, naip2_features, logit_scale, logit_bias, output_dict=False):
+        loss = self._loss(naip1_features, naip2_features, logit_scale, logit_bias)
 
         if self.world_size > 1:
             # exchange text features w/ neighbour world_size - 1 times
             right_rank = (self.rank + 1) % self.world_size
             left_rank = (self.rank - 1 + self.world_size) % self.world_size
             if self.bidir:
-                text_features_to_right = text_features_to_left = text_features
+                naip2_features_to_right = naip2_features_to_left = naip2_features
                 num_bidir, remainder = divmod(self.world_size - 1, 2)
                 for i in range(num_bidir):
-                    text_features_recv = neighbour_exchange_bidir_with_grad(
+                    naip2_features_recv = neighbour_exchange_bidir_with_grad(
                         left_rank,
                         right_rank,
-                        text_features_to_left,
-                        text_features_to_right,
+                        naip2_features_to_left,
+                        naip2_features_to_right,
                     )
 
-                    for f in text_features_recv:
+                    for f in naip2_features_recv:
                         loss += self._loss(
-                            image_features,
+                            naip1_features,
                             f,
                             logit_scale,
                             logit_bias,
                             negative_only=True,
                         )
-                    text_features_to_left, text_features_to_right = text_features_recv
+                    naip2_features_to_left, naip2_features_to_right = naip2_features_recv
 
                 if remainder:
-                    text_features_recv = neighbour_exchange_with_grad(
-                        left_rank, right_rank, text_features_to_right)
+                    naip2_features_recv = neighbour_exchange_with_grad(
+                        left_rank, right_rank, naip2_features_to_right)
 
                     loss += self._loss(
-                        image_features,
-                        text_features_recv,
+                        naip1_features,
+                        naip2_features_recv,
                         logit_scale,
                         logit_bias,
                         negative_only=True,
                     )
             else:
-                text_features_to_right = text_features
+                naip2_features_to_right = naip2_features
                 for i in range(self.world_size - 1):
-                    text_features_from_left = neighbour_exchange_with_grad(
-                        left_rank, right_rank, text_features_to_right)
+                    naip2_features_from_left = neighbour_exchange_with_grad(
+                        left_rank, right_rank, naip2_features_to_right)
 
                     loss += self._loss(
-                        image_features,
-                        text_features_from_left,
+                        naip1_features,
+                        naip2_features_from_left,
                         logit_scale,
                         logit_bias,
                         negative_only=True,
                     )
-                    text_features_to_right = text_features_from_left
+                    naip2_features_to_right = naip2_features_from_left
 
         return {"contrastive_loss": loss} if output_dict else loss
