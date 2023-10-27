@@ -39,7 +39,7 @@ class SSRDataset(data.Dataset):
         i = random.randint(0, image.shape[0] - crop_size)
         j = random.randint(0, image.shape[1] - crop_size)
         crop = image[i:i+crop_size, j:j+crop_size]
-        crop = skimage.transform.resize(crop, (128, 128), preserve_range=True).astype(np.uint8)
+        crop = skimage.transform.resize(crop, (224, 224), preserve_range=True).astype(np.uint8)
         return crop
 
     def __getitem__(self, index):

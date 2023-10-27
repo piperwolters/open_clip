@@ -96,6 +96,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         naip_images, good_images, bad_images = batch
         naip1_images = torch.cat([naip_images, bad_images], dim=0)
         naip2_images = torch.cat([good_images, bad_images], dim=0)
+        #naip1_images = naip_images
+        #naip2_images = good_images
         naip1_images = naip1_images.to(device=device, dtype=input_dtype)
         naip2_images = naip2_images.to(device=device, dtype=input_dtype)
 
@@ -286,7 +288,11 @@ def evaluate(model, data, epoch, args, tb_writer=None):
         all_naip1_features, all_naip2_features = [], []
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
-                naip1, naip2 = batch
+                naip_images, good_images, bad_images = batch
+                naip1 = torch.cat([naip_images, bad_images], dim=0)
+                naip2 = torch.cat([good_images, bad_images], dim=0)
+                #naip1 = naip_images
+                #naip2 = good_images
                 naip1 = naip1.to(device=device, non_blocking=True)
                 naip2 = naip2.to(device=device, non_blocking=True)
 
