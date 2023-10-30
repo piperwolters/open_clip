@@ -24,10 +24,11 @@ data_dir = '/data/piperw/data/mturk/all_mturk_outputs/'
 metrics2run = [
                 #'psnr', 
                 #'ssim', 
+                'cpsnr',
                 #'lpips_alex', 
                 #'lpips_vgg', 
                 #'clip' 
-                'naip_clip', 
+                #'naip_clip', 
                 #'sat_clip',
                 #'siglip', 
                 #'dino', 
@@ -182,7 +183,7 @@ if 'satlas_backbone' in metrics2run or 'satlas_fpn' in metrics2run:
 ########################################################################################################
 
 metric_names = ['psnr', 'ssim', 'lpips_alex', 'lpips_vgg', 'clip', 'naip_clip', 'sat_clip', 'siglip', 'dino', 'satlas_backbone', 'satlas_fpn',
-                'metaclip', 'sam', 'siglip_400m', 'eva', 'clipa', 'eva_plus', 'another_siglip']
+                'metaclip', 'sam', 'siglip_400m', 'eva', 'clipa', 'eva_plus', 'another_siglip', 'cpsnr']
 
 model_names = ['srcnn','highresnet','sr3','sr3_cfg','esrgan_satlas','esrgan_satlas_chkpt5k',
                 'esrgan_satlas_chkpt50k','esrgan_osm','esrgan_osm_chkpt5k','esrgan_osm_chkpt50k']
@@ -240,6 +241,12 @@ for idx,(chip, d) in enumerate(annots.items()):
             correct['psnr'] += 1
         if ( avg_human < 1 ) == (ssim_model1 > ssim_model2):
             correct['ssim'] += 1
+
+    if 'cpsnr' in metrics2run:
+        cpsnr_model1 = calculate_cpsnr(naip_im, model1_im, 3)
+        cpsnr_model2 = calculate_cpsnr(naip_im, model2_im, 3)
+        if ( avg_human < 1 ) == (cpsnr_model1 > cpsnr_model2):
+            correct['cpsnr'] += 1
 
     if 'lpips_alex' in metrics2run or 'lpips_vgg' in metrics2run:
         # LPIPS
