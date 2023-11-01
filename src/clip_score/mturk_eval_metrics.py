@@ -12,22 +12,38 @@ from metrics import *
 
 device = torch.device('cuda')
 
-# Using json file that contains annotations for BOTH batch01 and batch02
-# ex: {"36005_51983": {"model1": "esrgan_osm_chkpt50k", "model2": "srcnn", "answers": [0, 0, 0, 0, 0]}
-annots_file = open('/data/piperw/scripts/mturk_batch01and02_dict.json')
-annots = json.load(annots_file)
+application_type = 'natural'   # naip_s2, natural, faces, worldstrat
 
-# Data directory containing symlinks to both urban outputs and disjoint-from-training outputs
-data_dir = '/data/piperw/data/mturk/all_mturk_outputs/'
+if application_type == 'natural':
+    annots_file = open('/data/piperw/data/mturk/natural_images/mturk_natural_batch01_dict.json')
+    annots = json.load(annots_file)
+    data_dir = '/data/piperw/data/mturk/natural_images/natural_human_feedback_crop/'
+
+    model_names = ['bicubic', 'edsr_r32f256', 'nina_b2', 'realesrgan_generalx4v3', 'edsr_baseline',
+                'nina_b0', 'realesrgan', 'sr3distort']
+elif application_type == 'naip_s2':
+    # Using json file that contains annotations for BOTH batch01 and batch02
+    # ex: {"36005_51983": {"model1": "esrgan_osm_chkpt50k", "model2": "srcnn", "answers": [0, 0, 0, 0, 0]}
+    annots_file = open('/data/piperw/scripts/mturk_batch01and02_dict.json')
+    annots = json.load(annots_file)
+
+    # Data directory containing symlinks to both urban outputs and disjoint-from-training outputs
+    data_dir = '/data/piperw/data/mturk/all_mturk_outputs/'
+
+    model_names = ['srcnn','highresnet','sr3','sr3_cfg','esrgan_satlas','esrgan_satlas_chkpt5k',
+                    'esrgan_satlas_chkpt50k','esrgan_osm','esrgan_osm_chkpt5k','esrgan_osm_chkpt50k']
+else:
+    print("Note implemented yet...")
+
 
 # Specify list of metrics you want to run so that jobs can be dispursed onto different machines.
 metrics2run = [
                 #'psnr', 
                 #'ssim', 
-                'cpsnr',
+                #'cpsnr',
                 #'lpips_alex', 
                 #'lpips_vgg', 
-                #'clip' 
+                #'clip',
                 #'naip_clip', 
                 #'sat_clip',
                 #'siglip', 
@@ -40,7 +56,7 @@ metrics2run = [
                 #'eva', 
                 #'clipa', 
                 #'eva_plus', 
-                #'another_siglip'
+                'another_siglip'
             ]
 
 # TODO: deal with naip_clip, sat_clip, and models that use open_clip not playing nice,
@@ -185,15 +201,20 @@ if 'satlas_backbone' in metrics2run or 'satlas_fpn' in metrics2run:
 metric_names = ['psnr', 'ssim', 'lpips_alex', 'lpips_vgg', 'clip', 'naip_clip', 'sat_clip', 'siglip', 'dino', 'satlas_backbone', 'satlas_fpn',
                 'metaclip', 'sam', 'siglip_400m', 'eva', 'clipa', 'eva_plus', 'another_siglip', 'cpsnr']
 
-model_names = ['srcnn','highresnet','sr3','sr3_cfg','esrgan_satlas','esrgan_satlas_chkpt5k',
-                'esrgan_satlas_chkpt50k','esrgan_osm','esrgan_osm_chkpt5k','esrgan_osm_chkpt50k']
-
 correct = {mn: 0 for mn in metrics2run}
 print("Running the metrics:", metrics2run)
+
+counter = 0
 
 print("Iterating through ", len(annots.items()), " datapoints.")
 for idx,(chip, d) in enumerate(annots.items()):
     print("Processing...", idx)
+
+    if 'ADE' in chip:
+        print(chip)
+        counter += 1
+    else:
+        continue
 
     human_answers = d['answers']
     avg_human = mean(human_answers)
@@ -201,7 +222,10 @@ for idx,(chip, d) in enumerate(annots.items()):
     model1_name = d['model1']
     model2_name = d['model2']
 
-    naip_fp = data_dir + chip + '/' + 'naip.png'
+    if application_type == 'naip_s2':
+        naip_fp = data_dir + chip + '/' + 'naip.png'
+    else:
+        naip_fp = data_dir + chip + '/' + 'highres.png' 
     model1_fp = data_dir + chip + '/' + model1_name + '.png'
     model2_fp = data_dir + chip + '/' + model2_name + '.png'
 
@@ -426,7 +450,9 @@ for idx,(chip, d) in enumerate(annots.items()):
             correct['sam'] += 1
 
 
+print("Number of instances of current dataset counter:", counter)
 print(correct)
+
 for k,v in correct.items():
     print(v / 10000) 
 
