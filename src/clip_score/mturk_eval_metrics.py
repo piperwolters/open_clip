@@ -22,12 +22,12 @@ data_dir = '/data/piperw/data/mturk/all_mturk_outputs/'
 
 # Specify list of metrics you want to run so that jobs can be dispursed onto different machines.
 metrics2run = [
-                #'psnr', 
-                #'ssim', 
+                'psnr', 
+                'ssim', 
                 #'lpips_alex', 
                 #'lpips_vgg', 
                 #'clip' 
-                'naip_clip', 
+                #'naip_clip', 
                 #'sat_clip',
                 #'siglip', 
                 #'dino', 
